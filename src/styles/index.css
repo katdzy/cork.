@@ -1,0 +1,237 @@
+@import 'tailwindcss';
+
+/* ============================================================
+   Cork. — design tokens
+   A warm, tactile system: cork + paper + ink.
+   ============================================================ */
+
+@theme {
+  --font-sans: 'Manrope', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-hand: 'Caveat', 'Segoe Script', cursive;
+  --font-hand2: 'Patrick Hand', 'Caveat', cursive;
+  --font-mono: 'Space Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+
+  --color-wall: #c7bbaa;
+  --color-paper: #fdfaf2;
+  --color-paper2: #f5efe1;
+  --color-paper3: #e9e0cd;
+
+  --color-ink: #241d18;
+  --color-ink2: #4a3f37;
+  --color-ink3: #7d6f64;
+  --color-ink4: #a6968a;
+
+  --color-brick: #bd4f3c;
+  --color-dust: #5f7f99;
+  --color-butter: #e5bd63;
+  --color-sage: #879a77;
+  --color-blush: #d2938f;
+}
+
+:root {
+  --wall: #c7bbaa;
+  --ink: #241d18;
+
+  /* procedural textures ------------------------------------ */
+  --tex-fiber: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.7 0.9' numOctaves='3' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23f)'/%3E%3C/svg%3E");
+  --tex-wall: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='w'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.55' numOctaves='4' seed='5' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23w)'/%3E%3C/svg%3E");
+
+  /* elevation ---------------------------------------------- */
+  --sh-panel: 0 1px 2px rgba(52, 34, 18, 0.12), 0 10px 24px -12px rgba(52, 34, 18, 0.35),
+    0 30px 50px -30px rgba(40, 24, 10, 0.45);
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--wall);
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(189, 79, 60, 0.22);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid #8a5a30;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* ============================================================
+   The wall the board hangs on
+   ============================================================ */
+.wall {
+  background-color: #c7bbaa;
+  /* one element, one paint: the grain blends between background layers
+     instead of promoting a viewport-sized composited layer */
+  background-image: var(--tex-wall),
+    radial-gradient(120% 90% at 18% 4%, rgba(255, 247, 232, 0.8), rgba(255, 247, 232, 0) 55%),
+    radial-gradient(110% 100% at 88% 96%, rgba(74, 55, 38, 0.32), rgba(74, 55, 38, 0) 60%),
+    linear-gradient(168deg, #d3c7b6 0%, #c3b6a4 48%, #b0a290 100%);
+  background-size: 300px 300px, 100% 100%, 100% 100%, 100% 100%;
+  background-blend-mode: soft-light, normal, normal, normal;
+}
+
+/* ============================================================
+   Cork surface — layered grain, blotches, granules, light
+   ============================================================ */
+/* the cork surface itself is composed in CorkSurface.tsx */
+
+/* wooden frame around the board */
+.board-frame {
+  background-image: repeating-linear-gradient(
+      92deg,
+      rgba(255, 226, 186, 0.05) 0 2px,
+      rgba(40, 22, 8, 0.06) 2px 5px,
+      rgba(255, 226, 186, 0.03) 5px 9px
+    ),
+    linear-gradient(178deg, #8a6238 0%, #7a5430 32%, #6d4a29 68%, #5c3d21 100%);
+  box-shadow: 0 2px 3px rgba(40, 24, 10, 0.4), 0 18px 30px -12px rgba(40, 24, 10, 0.5),
+    0 60px 90px -50px rgba(30, 16, 4, 0.8), inset 0 1px 0 rgba(255, 226, 186, 0.3),
+    inset 0 -2px 3px rgba(30, 16, 4, 0.45);
+}
+
+/* ============================================================
+   Paper
+   ============================================================ */
+.paper-tex::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--tex-fiber);
+  background-size: 240px 240px;
+  opacity: 0.24;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+/* ============================================================
+   Floating UI — warm paper, never glassy blue
+   ============================================================ */
+/* No backdrop-filter here on purpose: at this opacity the blur is invisible,
+   but it would make the browser re-blur everything under every floating panel
+   on each frame the board moves beneath them. */
+.panel {
+  background: linear-gradient(176deg, rgba(255, 253, 247, 0.97), rgba(247, 241, 229, 0.96));
+  border: 1px solid rgba(120, 92, 62, 0.16);
+  box-shadow: var(--sh-panel);
+}
+
+.panel-solid {
+  background: linear-gradient(176deg, #fffdf7, #f6f0e2);
+  border: 1px solid rgba(120, 92, 62, 0.18);
+  box-shadow: var(--sh-panel);
+}
+
+.hairline {
+  background: linear-gradient(90deg, transparent, rgba(120, 92, 62, 0.2) 12%, rgba(120, 92, 62, 0.2) 88%, transparent);
+  height: 1px;
+}
+
+/* ============================================================
+   Typography helpers
+   ============================================================ */
+.hand {
+  font-family: var(--font-hand);
+  font-weight: 600;
+}
+
+.hand2 {
+  font-family: var(--font-hand2);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7d6f64;
+}
+
+/* ============================================================
+   Board items
+   ============================================================ */
+.item-shadow {
+  filter: drop-shadow(0 1px 1px rgba(58, 34, 12, 0.26)) drop-shadow(0 6px 9px rgba(58, 34, 12, 0.22))
+    drop-shadow(0 14px 20px rgba(45, 26, 8, 0.26));
+}
+
+.item-shadow-hover {
+  filter: drop-shadow(0 2px 2px rgba(58, 34, 12, 0.24)) drop-shadow(0 10px 15px rgba(58, 34, 12, 0.26))
+    drop-shadow(0 24px 32px rgba(45, 26, 8, 0.3));
+}
+
+.item-shadow-drag {
+  filter: drop-shadow(0 6px 5px rgba(58, 34, 12, 0.18)) drop-shadow(0 22px 28px rgba(58, 34, 12, 0.28))
+    drop-shadow(0 48px 56px rgba(40, 22, 6, 0.38));
+}
+
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.grabbing,
+.grabbing * {
+  cursor: grabbing !important;
+}
+
+/* thin, warm scrollbars inside panels */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 92, 62, 0.35) transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(120, 92, 62, 0.3);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* ============================================================
+   Motion
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
