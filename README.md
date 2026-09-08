@@ -18,6 +18,31 @@ npm run dev
 | `npm run preview` | serve the production build |
 | `npm run typecheck` | types only |
 
+## Hosting
+
+It's a static build with no backend, so `dist/` can be dropped on anything.
+
+**GitHub Pages** is wired up: pushing to `main` builds and publishes via
+`.github/workflows/deploy.yml`. It needs enabling once — repository
+**Settings → Pages → Source: GitHub Actions** — after which the site is at
+`https://<user>.github.io/<repo>/`.
+
+**Anywhere else** (Vercel, Netlify, Cloudflare Pages, any static host) needs no
+configuration beyond the usual:
+
+| | |
+| --- | --- |
+| build command | `npm run build` |
+| output directory | `dist` |
+
+`base` is `'./'`, so assets are referenced relatively and the same build works
+at a domain root or under a project subpath. There is no client-side routing,
+so no SPA rewrite rule is needed either.
+
+Note the app keeps everything in the visitor's own browser (IndexedDB). Hosting
+it publishes the app, not your board — every visitor gets their own, starting
+from the demo.
+
 ## How it fits together
 
 ```
