@@ -151,7 +151,19 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose(): v
               />
               <span className="eyebrow">{board?.name ?? 'Board'}</span>
             </span>
-            <span className="text-[11px] text-[#a6968a]">added {relativeDay(memory.createdAt)}</span>
+            <span className="flex items-center gap-[6px]">
+              <span className="text-[11px] text-[#a6968a]">added {relativeDay(memory.createdAt)}</span>
+              <button
+                onClick={close}
+                aria-label="Close"
+                title="Close"
+                className="-mr-[7px] -mt-[6px] grid h-[28px] w-[28px] shrink-0 place-items-center rounded-full text-[#a6968a] transition-colors hover:bg-[rgba(120,92,62,0.12)] hover:text-[#3f362a] max-[899px]:hidden"
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+                </svg>
+              </button>
+            </span>
           </div>
 
           {editing ? (
@@ -381,7 +393,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose(): v
       <button
         onClick={close}
         aria-label="Close"
-        className="absolute right-5 top-5 grid h-[38px] w-[38px] place-items-center rounded-full text-[#f3e6d4] transition-colors hover:bg-[rgba(255,240,220,0.16)]"
+        className="absolute right-5 top-5 grid h-[38px] w-[38px] place-items-center rounded-full text-[#f3e6d4] transition-colors hover:bg-[rgba(255,240,220,0.16)] min-[900px]:hidden"
         style={{ background: 'rgba(40,24,12,0.4)', backdropFilter: 'blur(6px)' }}
       >
         <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
