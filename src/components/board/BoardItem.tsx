@@ -17,13 +17,14 @@ const LIFT = { type: 'spring' as const, stiffness: 520, damping: 30, mass: 0.6 }
 interface Props {
   memory: Memory;
   index: number;
-  zoomRef: React.MutableRefObject<number>;
+  /** Screen → board: a ray from the camera onto the wall the board hangs on. */
+  toBoard(clientX: number, clientY: number): { x: number; y: number };
   interactive?: boolean;
   /** Faded because it doesn't match the current search. */
   dimmed?: boolean;
 }
 
-function BoardItemBase({ memory, index, zoomRef, interactive = true, dimmed = false }: Props) {
+function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = false }: Props) {
   // one selector per action: subscribing to the whole store would re-render
   // every item on the board for any change at all
   const updateMemory = useCork((s) => s.updateMemory);
@@ -107,6 +108,8 @@ function BoardItemBase({ memory, index, zoomRef, interactive = true, dimmed = fa
     ox: 0,
     oy: 0,
     moved: false,
+    bx: 0,
+    by: 0,
     startScale: 1,
     startRot: 0,
     startDist: 1,
@@ -128,6 +131,9 @@ function BoardItemBase({ memory, index, zoomRef, interactive = true, dimmed = fa
     g.mode = 'move';
     g.px = e.clientX;
     g.py = e.clientY;
+    const start = toBoard(e.clientX, e.clientY);
+    g.bx = start.x;
+    g.by = start.y;
     g.ox = x.get();
     g.oy = y.get();
     g.moved = false;
@@ -162,12 +168,13 @@ function BoardItemBase({ memory, index, zoomRef, interactive = true, dimmed = fa
     if (g.mode === 'none' || e.pointerId !== g.pointerId) return;
 
     if (g.mode === 'move') {
-      const zoom = zoomRef.current || 1;
-      const dx = (e.clientX - g.px) / zoom;
-      const dy = (e.clientY - g.py) / zoom;
+      // Board deltas rather than screen deltas over a zoom factor: with the
+      // room turned on its axes the two are no longer the same thing, and the
+      // photo has to stay under the finger that picked it up.
+      const now = toBoard(e.clientX, e.clientY);
       if (!g.moved && Math.hypot(e.clientX - g.px, e.clientY - g.py) > 4) g.moved = true;
-      x.set(clamp(g.ox + dx, -60, BOARD_W - 60));
-      y.set(clamp(g.oy + dy, -40, BOARD_H - 60));
+      x.set(clamp(g.ox + now.x - g.bx, -60, BOARD_W - 60));
+      y.set(clamp(g.oy + now.y - g.by, -40, BOARD_H - 60));
       return;
     }
 

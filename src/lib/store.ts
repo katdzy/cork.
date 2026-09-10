@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Board, Memory, PersistedState, Viewport } from './types';
+import type { Board, Memory, PersistedState, PropPlacement, RoomScene } from './types';
 import { storage, releaseAsset } from './storage';
 import { buildSeedState } from './seed';
 import { uid } from './utils';
@@ -18,7 +18,8 @@ interface CorkState {
   boards: Board[];
   memories: Memory[];
   activeBoardId: string;
-  viewports: Record<string, Viewport>;
+  props: Record<string, PropPlacement>;
+  scene: RoomScene;
 
   /* transient UI ------------------------------------------------ */
   selectedId: string | null;
@@ -45,7 +46,8 @@ interface CorkState {
   open(id: string | null): void;
   setQuery(q: string): void;
   setFilter(f: FilterMode): void;
-  setViewport(boardId: string, v: Viewport): void;
+  placeProp(id: string, at: PropPlacement): void;
+  setScene(scene: RoomScene): void;
 
   toast(message: string, actionLabel?: string, action?: () => void): void;
   dismissToast(id: string): void;
@@ -58,7 +60,8 @@ const persistable = (s: CorkState): PersistedState => ({
   boards: s.boards,
   memories: s.memories,
   activeBoardId: s.activeBoardId,
-  viewports: s.viewports,
+  props: s.props,
+  scene: s.scene,
 });
 
 let saveTimer: number | undefined;
@@ -75,7 +78,8 @@ export const useCork = create<CorkState>((set, get) => ({
   boards: [],
   memories: [],
   activeBoardId: '',
-  viewports: {},
+  props: {},
+  scene: 'kitchen',
 
   selectedId: null,
   openId: null,
@@ -90,7 +94,8 @@ export const useCork = create<CorkState>((set, get) => ({
       boards: state.boards,
       memories: state.memories,
       activeBoardId: state.activeBoardId || state.boards[0]?.id || '',
-      viewports: state.viewports ?? {},
+      props: state.props ?? {},
+      scene: state.scene ?? 'kitchen',
       ready: true,
     });
     if (!saved) void storage.saveState(state);
@@ -231,8 +236,13 @@ export const useCork = create<CorkState>((set, get) => ({
     set({ filter: f, selectedId: null });
   },
 
-  setViewport(boardId, v) {
-    set((s) => ({ viewports: { ...s.viewports, [boardId]: v } }));
+  setScene(scene) {
+    set({ scene });
+    schedulePersist(get);
+  },
+
+  placeProp(id, at) {
+    set((s) => ({ props: { ...s.props, [id]: at } }));
     schedulePersist(get);
   },
 
@@ -253,7 +263,8 @@ export const useCork = create<CorkState>((set, get) => ({
       boards: fresh.boards,
       memories: fresh.memories,
       activeBoardId: fresh.activeBoardId,
-      viewports: {},
+      props: {},
+      scene: 'kitchen',
       selectedId: null,
       openId: null,
       query: '',

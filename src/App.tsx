@@ -176,10 +176,12 @@ export default function App() {
       {/* a quiet hint — never over an empty board, which says its own piece */}
       {isDesktop && boardHasMemories && (
         <span
-          className="pointer-events-none absolute bottom-5 left-1/2 z-20 -translate-x-1/2 text-[11.5px] font-semibold"
-          style={{ color: 'rgba(52,30,10,0.52)', textShadow: '0 1px 0 rgba(255,238,210,0.35)' }}
+          /* It floats over whatever the camera happens to be on — cork, oak,
+             white plaster — so it carries its own paper rather than trusting
+             any one of them. The same paper as every other floating control. */
+          className="panel pointer-events-none absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full px-3.5 py-1 text-[11.5px] font-semibold text-[#5d4f42]"
         >
-          drag to move · scroll to pan · ⌘ scroll to zoom
+          drag to look around · scroll to zoom · double-click to move in
         </span>
       )}
     </div>
@@ -204,7 +206,7 @@ function Splash() {
           <Pin style="red" size={34} />
         </motion.div>
         <Wordmark size={34} />
-        <span className="hand mt-2 text-[19px] text-[#6b5a45]">keep your memories close</span>
+        <span className="hand mt-2 text-[19px] text-[#8a7458]">keep your memories close</span>
       </motion.div>
     </div>
   );

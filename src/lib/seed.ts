@@ -352,6 +352,5 @@ export function buildSeedState(): PersistedState {
     boards,
     memories,
     activeBoardId: 'b_life',
-    viewports: {},
   };
 }

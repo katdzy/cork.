@@ -9,4 +9,19 @@ export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
   server: { port: 5173 },
+  build: {
+    // three is most of the bytes and changes about once a year, while the app
+    // changes every deploy. Split apart, a returning reader re-downloads the
+    // few kilobytes that actually moved instead of the whole megabyte.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          three: ['three'],
+          react: ['react', 'react-dom'],
+          motion: ['framer-motion'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 700,
+  },
 });

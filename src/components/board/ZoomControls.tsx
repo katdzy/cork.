@@ -1,9 +1,13 @@
 import { useMedia } from '../../lib/useMedia';
+import type { SceneDef } from '../../scene/themes';
 
 interface Props {
   zoom: number;
   /** Lifted above the results shelf when it is open. */
   raised?: boolean;
+  /** The room this button would move you to — never the one you're in. */
+  nextRoom: SceneDef;
+  onSwapRoom(): void;
   onZoomIn(): void;
   onZoomOut(): void;
   onFit(): void;
@@ -13,13 +17,14 @@ interface Props {
 const btn =
   'grid h-[30px] w-[30px] place-items-center rounded-full text-[#6b5a45] transition-colors hover:bg-[rgba(120,92,62,0.12)] hover:text-[#2f2419] disabled:opacity-40';
 
-export function ZoomControls({ zoom, raised, onZoomIn, onZoomOut, onFit, onReset }: Props) {
+export function ZoomControls({ zoom, raised, nextRoom, onSwapRoom, onZoomIn, onZoomOut, onFit, onReset }: Props) {
   // the results shelf is centred and capped at 760px — it only reaches the
   // corner controls on narrower screens
   const collides = !useMedia('(min-width: 1160px)');
 
   return (
     <div
+      data-board-chrome
       className="panel pointer-events-auto absolute right-5 z-30 flex items-center gap-[2px] rounded-full p-[4px] transition-[bottom] duration-300 max-[899px]:left-3 max-[899px]:right-auto"
       style={{
         bottom:
@@ -60,6 +65,36 @@ export function ZoomControls({ zoom, raised, onZoomIn, onZoomOut, onFit, onReset
             strokeLinecap="round"
           />
         </svg>
+      </button>
+
+      <span className="mx-[3px] h-[18px] w-px bg-[rgba(120,92,62,0.2)]" />
+
+      {/* The room, not a theme: it moves the board to a different wall. The
+          button shows where you would be going, never where you are. */}
+      <button
+        className={btn}
+        onClick={onSwapRoom}
+        aria-label={`Move to the ${nextRoom.label.toLowerCase()} — ${nextRoom.blurb.toLowerCase()}`}
+        title={`${nextRoom.label} · ${nextRoom.blurb}`}
+      >
+        {nextRoom.id === 'studio' ? (
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 1.4v2.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            <path d="M3.2 9.1a4.8 4.8 0 0 1 9.6 0z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+            <path d="M6.4 11.6h3.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            <path d="M7 14h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity="0.5" />
+          </svg>
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
+            <path
+              d="M8 1.5v1.4M8 13.1v1.4M1.5 8h1.4M13.1 8h1.4M3.4 3.4l1 1M11.6 11.6l1 1M12.6 3.4l-1 1M4.4 11.6l-1 1"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+            />
+          </svg>
+        )}
       </button>
     </div>
   );
