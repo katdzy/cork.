@@ -31,6 +31,7 @@ export default function App() {
   const filter = useCork((s) => s.filter);
   const query = useCork((s) => s.query);
   const openId = useCork((s) => s.openId);
+  const view = useCork((s) => s.view);
   const open = useCork((s) => s.open);
   const select = useCork((s) => s.select);
   const setFilter = useCork((s) => s.setFilter);
@@ -104,7 +105,9 @@ export default function App() {
   if (!ready) return <Splash />;
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
+    /* clip rather than hidden — see BoardCanvas. A scroll container here would
+       simply catch the same focus scroll one level up. */
+    <div className="relative h-full w-full overflow-clip">
       <input
         ref={fileRef}
         type="file"
@@ -178,10 +181,15 @@ export default function App() {
         <span
           /* It floats over whatever the camera happens to be on — cork, oak,
              white plaster — so it carries its own paper rather than trusting
-             any one of them. The same paper as every other floating control. */
+             any one of them. The same paper as every other floating control.
+             It also says what the gestures do *now*: the cork view changes all
+             three of them, and a line that keeps describing the room is worse
+             than no line at all. */
           className="panel pointer-events-none absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full px-3.5 py-1 text-[11.5px] font-semibold text-[#5d4f42]"
         >
-          drag to look around · scroll to zoom · double-click to move in
+          {view === 'cork'
+            ? 'drag to slide · scroll to zoom · esc for the room'
+            : 'drag to look around · scroll to zoom · double-click the cork to move in'}
         </span>
       )}
     </div>

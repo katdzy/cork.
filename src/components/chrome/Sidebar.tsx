@@ -42,6 +42,16 @@ const VIEWS: { id: FilterMode; label: string; icon: ReactNode }[] = [
   },
 ];
 
+/**
+ * How much of the left edge it covers: sixteen pixels of margin, its own two
+ * hundred and twenty-four, and a gutter so the board doesn't sit against it.
+ *
+ * Exported because the cork view frames the board into what is left of the
+ * window rather than into the window — and the honest place for that number
+ * is the thing that occupies the space.
+ */
+export const SIDEBAR_SPAN = 252;
+
 export function Sidebar({ onOpenSettings }: { onOpenSettings(): void }) {
   const boards = useCork((s) => s.boards);
   const memories = useCork((s) => s.memories);

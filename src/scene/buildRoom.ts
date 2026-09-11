@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CABINET, COUNTER, ROOM, WINDOW } from './layout';
-import { oak, plaster } from './textures';
+import { box, panel, pierced, still } from './parts';
+import { brushed, oak, plaster } from './textures';
 
 /**
  * The shell: plaster, floor, ceiling, the window that lights it all, and the
@@ -8,54 +9,11 @@ import { oak, plaster } from './textures';
  *
  * Built once into a static group. None of it moves, so it is all marked as
  * such — three.js then skips re-deriving world matrices for it every frame,
- * which over a hundred-odd meshes is most of a millisecond back.
+ * which over a hundred-odd meshes is most of a millisecond back. Afterwards
+ * `themes.ts` traces the lighting into its vertices and folds the whole thing
+ * down to one mesh per material, so what leaves here is a description rather
+ * than a scene graph.
  */
-
-const still = <T extends THREE.Object3D>(o: T) => {
-  o.matrixAutoUpdate = false;
-  o.updateMatrix();
-  return o;
-};
-
-export function box(
-  w: number,
-  h: number,
-  d: number,
-  material: THREE.Material,
-  x = 0,
-  y = 0,
-  z = 0,
-): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
-  m.position.set(x, y, z);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  return m;
-}
-
-/** A rectangle with a rectangle taken out of it — a wall with a window in it. */
-function pierced(w: number, h: number, hole: THREE.Box2) {
-  const shape = new THREE.Shape();
-  shape.moveTo(-w / 2, -h / 2);
-  shape.lineTo(w / 2, -h / 2);
-  shape.lineTo(w / 2, h / 2);
-  shape.lineTo(-w / 2, h / 2);
-  shape.closePath();
-  const cut = new THREE.Path();
-  cut.moveTo(hole.min.x, hole.min.y);
-  cut.lineTo(hole.min.x, hole.max.y);
-  cut.lineTo(hole.max.x, hole.max.y);
-  cut.lineTo(hole.max.x, hole.min.y);
-  cut.closePath();
-  shape.holes.push(cut);
-  const g = new THREE.ShapeGeometry(shape);
-  // ShapeGeometry hands back UVs in shape space; scale them into tiling range
-  const uv = g.attributes.uv as THREE.BufferAttribute;
-  for (let i = 0; i < uv.count; i++) {
-    uv.setXY(i, uv.getX(i) / 2200, uv.getY(i) / 2200);
-  }
-  return g;
-}
 
 /** Blown-out daylight with a suggestion of a garden in it. */
 function skyTexture() {
@@ -104,16 +62,14 @@ export function buildRoom(): THREE.Group {
   const D = ROOM.depth;
 
   /* -- back wall ------------------------------------------------------- */
-  const back = new THREE.Mesh(new THREE.PlaneGeometry(W, H), wallMat);
+  const back = panel(W, H, wallMat);
   back.position.set(0, H / 2, 0);
-  back.receiveShadow = true;
   group.add(still(back));
 
   /* -- side walls; the right one has the window cut out of it ----------- */
-  const left = new THREE.Mesh(new THREE.PlaneGeometry(D, H), wallMat);
+  const left = panel(D, H, wallMat);
   left.rotation.y = Math.PI / 2;
   left.position.set(-ROOM.halfWidth, H / 2, D / 2);
-  left.receiveShadow = true;
   group.add(still(left));
 
   const hole = new THREE.Box2(
@@ -133,22 +89,25 @@ export function buildRoom(): THREE.Group {
     metalness: 0,
     ...oak('floor', { light: '#c79a68', dark: '#6b4526', repeat: 5, bump: 2.6, seed: 771 }),
   });
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), floorMat);
+  const floor = panel(W, D, floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, 0, D / 2);
-  floor.receiveShadow = true;
   group.add(still(floor));
 
-  const ceil = new THREE.Mesh(
-    new THREE.PlaneGeometry(W, D),
-    new THREE.MeshStandardMaterial({ color: 0xf3eee6, roughness: 1 }),
-  );
+  const ceil = panel(W, D, new THREE.MeshStandardMaterial({ color: 0xf3eee6, roughness: 1 }));
   ceil.rotation.x = Math.PI / 2;
   ceil.position.set(0, H, D / 2);
   group.add(still(ceil));
 
   /* -- the window ------------------------------------------------------- */
-  const paint = new THREE.MeshStandardMaterial({ color: 0xfbf8f2, roughness: 0.42, metalness: 0 });
+  const paint = new THREE.MeshStandardMaterial({
+    color: 0xfbf8f2,
+    roughness: 0.42,
+    metalness: 0,
+    // eggshell on a cabinet door holds a soft image of the window; flat white
+    // paint is the one thing in a kitchen that never happens
+    envMapIntensity: 1,
+  });
   const wH = WINDOW.top - WINDOW.bottom;
   const wD = WINDOW.far - WINDOW.near;
   const wZ = (WINDOW.near + WINDOW.far) / 2;
@@ -179,6 +138,8 @@ export function buildRoom(): THREE.Group {
     color: 0xffffff,
     roughness: 0.36,
     metalness: 0,
+    // oiled butcher block: the sheen down the length of it is the window
+    envMapIntensity: 1.5,
     ...oak('counter', { light: '#c9975e', dark: '#7f5223', repeat: 3.4, bump: 1.1, seed: 313 }),
   });
   const top = box(W, COUNTER.thickness, COUNTER.depth, oakCounter, 0, COUNTER.top - COUNTER.thickness / 2, COUNTER.depth / 2);
@@ -199,6 +160,22 @@ export function buildRoom(): THREE.Group {
   const count = Math.floor(W / (doorW + gap));
   const startX = -((count - 1) * (doorW + gap)) / 2;
 
+  /* One material for every pull, not one each. Identical materials that are
+     not the *same* material are five separate draw calls that the merge cannot
+     fold together, because what it batches by is material identity. */
+  const brass = new THREE.MeshStandardMaterial({
+    color: 0xb08d4e,
+    roughness: 0.32,
+    metalness: 0.85,
+    /* The surface in this room with most to gain from the captured
+       reflection. Brushed rather than polished: a mirror-smooth pull reflects
+       the probe's own viewpoint, which is right from the one place in the room
+       it was taken from and wrong from everywhere else. */
+    envMapIntensity: 2.4,
+    ...brushed(),
+    normalScale: new THREE.Vector2(0.5, 0.5),
+  });
+
   for (let i = 0; i < count; i++) {
     const dx = startX + i * (doorW + gap);
     const rail = 150;
@@ -212,7 +189,6 @@ export function buildRoom(): THREE.Group {
       group.add(still(box(w, h, 46, paint, dx + ox, doorY + oy, faceZ + 23)));
     }
     // a brass cup pull, like the reference
-    const brass = new THREE.MeshStandardMaterial({ color: 0xb08d4e, roughness: 0.32, metalness: 0.85 });
     group.add(still(box(230, 62, 60, brass, dx, doorY + doorH / 2 - 260, faceZ + 60)));
   }
 

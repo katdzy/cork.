@@ -74,6 +74,14 @@ export interface Memory {
   h: number;
 
   favorite: boolean;
+  /**
+   * Held where it is.
+   *
+   * A locked memory can still be selected, opened and edited — what it cannot
+   * do is move, turn or resize, by drag, handle or arrow key. Optional because
+   * every board saved before locking existed has to load as unlocked.
+   */
+  locked?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -102,6 +110,16 @@ export interface PropPlacement {
   z: number;
   rotation: number;
 }
+
+/**
+ * Which of the two ways of looking is in effect.
+ *
+ * `room` is the camera on its leash, free to swing around the place the board
+ * hangs in. `cork` is square on to the board and limited to two axes — see
+ * `scene/orbit.ts`. It is deliberately not persisted: it describes what you
+ * are doing right now, not what the board is.
+ */
+export type ViewMode = 'room' | 'cork';
 
 /**
  * A saved pan-and-zoom, from before the board hung in a room.

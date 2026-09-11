@@ -1,7 +1,23 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useCork } from '../../lib/store';
+import { setGraphicsPref, useGraphics, type GraphicsPref, type Tier } from '../../scene/quality';
 import { Wordmark } from '../chrome/Wordmark';
+
+const GRAPHICS: ReadonlyArray<[GraphicsPref, string]> = [
+  ['auto', 'Auto'],
+  ['low', 'Low'],
+  ['medium', 'Medium'],
+  ['high', 'High'],
+];
+
+const TIER_WORDS: Record<Tier, string> = { low: 'Low', medium: 'Medium', high: 'High' };
+
+const TIER_BLURBS: Record<Tier, string> = {
+  low: 'Smaller shadow maps, quarter-size surfaces and no light shafts, for a machine that would rather not.',
+  medium: 'A balance — most of the detail, at half the texture size.',
+  high: 'Everything: the largest shadow maps, full-size surfaces, the finest light trace.',
+};
 
 export function SettingsSheet({ onClose }: { onClose(): void }) {
   const boards = useCork((s) => s.boards);
@@ -10,6 +26,7 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
   const updateBoard = useCork((s) => s.updateBoard);
   const deleteBoard = useCork((s) => s.deleteBoard);
   const resetEverything = useCork((s) => s.resetEverything);
+  const { pref, tier } = useGraphics();
   const board = boards.find((b) => b.id === activeBoardId);
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -83,6 +100,37 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
             ? `Delete “${board?.name}” and its ${boardCount} ${boardCount === 1 ? 'memory' : 'memories'}?`
             : 'Delete this board'}
         </button>
+
+        <div className="hairline my-5" />
+
+        <span className="eyebrow">Graphics</span>
+        <div className="mt-2 flex gap-1.5 rounded-[11px] bg-[rgba(120,92,62,0.09)] p-1">
+          {GRAPHICS.map(([value, label]) => {
+            const on = pref === value;
+            return (
+              <button
+                key={value}
+                onClick={() => setGraphicsPref(value)}
+                aria-pressed={on}
+                className="flex-1 rounded-[8px] py-[7px] text-[12.5px] font-bold transition-colors"
+                style={{
+                  background: on ? 'rgba(255,253,247,0.95)' : 'transparent',
+                  color: on ? '#2f2419' : '#7d6f64',
+                  boxShadow: on ? '0 1px 2px rgba(52,34,18,0.14)' : 'none',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[13px] leading-[1.5] text-[#5d4f42]">
+          {pref === 'auto'
+            ? `Matched to this device — currently ${TIER_WORDS[tier]}.`
+            : TIER_BLURBS[tier]}{' '}
+          Shadows, texture detail and how finely the room&rsquo;s light is traced all follow this;
+          changing it builds the room again.
+        </p>
 
         <div className="hairline my-5" />
 

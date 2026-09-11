@@ -7,6 +7,9 @@ interface Props {
   raised?: boolean;
   /** The room this button would move you to — never the one you're in. */
   nextRoom: SceneDef;
+  /** Square on to the board, two axes. */
+  cork: boolean;
+  onToggleCork(): void;
   onSwapRoom(): void;
   onZoomIn(): void;
   onZoomOut(): void;
@@ -17,7 +20,18 @@ interface Props {
 const btn =
   'grid h-[30px] w-[30px] place-items-center rounded-full text-[#6b5a45] transition-colors hover:bg-[rgba(120,92,62,0.12)] hover:text-[#2f2419] disabled:opacity-40';
 
-export function ZoomControls({ zoom, raised, nextRoom, onSwapRoom, onZoomIn, onZoomOut, onFit, onReset }: Props) {
+export function ZoomControls({
+  zoom,
+  raised,
+  nextRoom,
+  cork,
+  onToggleCork,
+  onSwapRoom,
+  onZoomIn,
+  onZoomOut,
+  onFit,
+  onReset,
+}: Props) {
   // the results shelf is centred and capped at 760px — it only reaches the
   // corner controls on narrower screens
   const collides = !useMedia('(min-width: 1160px)');
@@ -41,8 +55,8 @@ export function ZoomControls({ zoom, raised, nextRoom, onSwapRoom, onZoomIn, onZ
 
       <button
         onClick={onReset}
-        title="Reset view"
-        aria-label={`Zoom ${Math.round(zoom * 100)} percent — reset view`}
+        title={cork ? 'Frame the board' : 'Reset view'}
+        aria-label={`Zoom ${Math.round(zoom * 100)} percent — ${cork ? 'frame the board' : 'reset view'}`}
         className="tnum min-w-[46px] rounded-full px-1 text-center text-[11.5px] font-bold text-[#5d4f42] transition-colors hover:text-[#2f2419]"
       >
         {Math.round(zoom * 100)}%
@@ -64,6 +78,34 @@ export function ZoomControls({ zoom, raised, nextRoom, onSwapRoom, onZoomIn, onZ
             strokeWidth="1.5"
             strokeLinecap="round"
           />
+        </svg>
+      </button>
+
+      {/* Square on to the board, and flat.
+          A toggle rather than a "go here" button like the room below: it is a
+          mode, it is reversible with the same tap, and what it is doing to
+          every gesture on the surface underneath should be visible without
+          making one. Hence `aria-pressed` and a filled state, rather than an
+          icon that quietly swaps to the other thing. */}
+      <button
+        className={cork ? `${btn} hover:bg-transparent` : btn}
+        style={cork ? { background: '#3f362a', color: '#fdf6e8' } : undefined}
+        onClick={onToggleCork}
+        aria-pressed={cork}
+        aria-label={cork ? 'Leave the cork view' : 'Cork view — square on to the board'}
+        title={cork ? 'Back to the room · esc' : 'Cork view — square on, slide and zoom only'}
+      >
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect
+            x="2.6"
+            y="4.4"
+            width="10.8"
+            height="8.4"
+            rx="1.3"
+            stroke="currentColor"
+            strokeWidth="1.45"
+          />
+          <circle cx="8" cy="2.5" r="1.25" fill="currentColor" />
         </svg>
       </button>
 

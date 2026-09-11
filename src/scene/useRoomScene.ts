@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { CSS3DObject, CSS3DRenderer } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { useCork } from '../lib/store';
-import type { Memory } from '../lib/types';
+import type { Memory, ViewMode } from '../lib/types';
 import { BOARD_H, BOARD_W } from '../lib/types';
 import { memoryBounds } from '../lib/utils';
-import { COUNTER } from './layout';
+import { CORK_VIEW, COUNTER, EYE_BOX } from './layout';
 import { SCENES, disposeScene, type SceneId } from './themes';
 import { buildProps, type PlacedProp } from './props';
 import { Orbit } from './orbit';
+import { captureProbe, disposeNeutral, type Probe } from './probe';
+import { cancelBakes } from './bake';
+import { quality, useGraphics } from './quality';
+import { disposeTextures } from './textures';
 
 export interface SceneApi {
   focusOn(memory: Memory, zoom?: number): void;
@@ -39,17 +42,36 @@ const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
  * Everything is drawn on demand. The rooms are static, so once the camera
  * settles the loop does nothing at all — no redraw, no shadow pass, no GPU
  * work.
+ *
+ * There are two ways of looking at it, and every gesture below asks which one
+ * is in effect before it does anything. In the room the camera swings, the
+ * props can be picked up and put down, and a double-click moves in on
+ * whatever is under it. In the cork view it is square on to the board and
+ * flat: drag slides, wheel zooms about the pointer, the room's furniture is
+ * not pickable at all, and nothing on the way to a photograph can knock the
+ * camera off axis. See `orbit.ts` for why that is a mode rather than a
+ * sensitivity setting.
  */
 export function useRoomScene(
   containerRef: React.RefObject<HTMLDivElement>,
   boardRef: React.RefObject<HTMLDivElement>,
   memories: Memory[],
   sceneId: SceneId,
+  view: ViewMode,
+  /** Pixels down the left edge that are behind chrome — see `CorkLeash`. */
+  insetLeft: number,
 ) {
   const [zoomLabel, setZoomLabel] = useState(1);
   const [grabbing, setGrabbing] = useState(false);
+  /* Half of what a tier decides — multisampling, the shadow filter, the size
+     every texture was baked at — is fixed for the life of a WebGL context or
+     of a texture upload. So the tier is a dependency of this effect: changing
+     it tears the renderer down and builds the room again, which is the only
+     honest way to apply it. Nobody does it twice in a session. */
+  const { tier } = useGraphics();
   const placeProp = useCork((s) => s.placeProp);
   const select = useCork((s) => s.select);
+  const setView = useCork((s) => s.setView);
   const savedProps = useCork((s) => s.props);
 
   const memoriesRef = useRef(memories);
@@ -59,9 +81,17 @@ export function useRoomScene(
   /* The room at mount. A ref keeps its first value, which is exactly what
      "which room to build before the swap effect has run" means. */
   const firstScene = useRef(sceneId);
+  /* The way of looking, for a renderer that is rebuilt when the graphics tier
+     changes and has to come back up in the mode it went down in. */
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const insetRef = useRef(insetLeft);
+  insetRef.current = insetLeft;
 
   const api = useRef<SceneApi | null>(null);
   const swapScene = useRef<((id: SceneId, animated: boolean) => void) | null>(null);
+  const applyView = useRef<((v: ViewMode) => void) | null>(null);
+  const reframe = useRef<(() => void) | null>(null);
   const handlers = useRef<{
     down(e: React.PointerEvent): void;
     move(e: React.PointerEvent): void;
@@ -75,11 +105,25 @@ export function useRoomScene(
     if (!container || !boardEl) return;
 
     /* ------------------------------------------------------------ setup */
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    const q = quality();
+    /*
+     * Multisampling is asked for here or never.
+     *
+     * `antialias` is a property of the drawing buffer, fixed when the context
+     * is created — and on a tiled mobile GPU it is not a filter but a second
+     * set of colour and depth attachments, resolved every frame. It is the
+     * single most expensive thing on this list and the easiest to give up,
+     * because the alternative on a phone is a display dense enough that the
+     * edges were never the problem.
+     */
+    const renderer = new THREE.WebGLRenderer({
+      antialias: q.antialias,
+      powerPreference: q.powerPreference,
+    });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = q.shadowType;
     // The rooms never move, so their shadows are drawn once and kept. Only a
     // prop being dragged, or a change of room, asks for another pass.
     renderer.shadowMap.autoUpdate = false;
@@ -106,10 +150,22 @@ export function useRoomScene(
     const camera = new THREE.PerspectiveCamera(38, 1, 200, 30000);
     const orbit = new Orbit();
 
-    // A neutral room, prefiltered, so every material has something to reflect.
-    // Without it metal reads as flat grey and ceramic loses its sheen.
+    /*
+     * What everything in the room reflects.
+     *
+     * This used to be `RoomEnvironment` — three.js's generic grey box, built
+     * as a scene of twenty meshes and rendered six times so that metal had
+     * something, anything, to catch. It works, and it is why the brass read as
+     * brass; but what it reflects is a studio nobody is standing in, and next
+     * to a window it shows: the pulls pick up a soft grey nothing where the
+     * window should be.
+     *
+     * Each room now captures itself instead — see `probe.ts` — which costs
+     * less than building RoomEnvironment did and reflects the actual glazing,
+     * the actual city, the actual plaster.
+     */
     const pmrem = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.06).texture;
+    pmrem.compileCubemapShader();
 
     /* --------------------------------------------------- the DOM board */
     const cssScene = new THREE.Scene();
@@ -123,9 +179,13 @@ export function useRoomScene(
     const deskPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -COUNTER.top);
     const hit = new THREE.Vector3();
 
-    const setPointer = (clientX: number, clientY: number) => {
+    /** Screen pixels to −1..1 across the canvas, +Y up. */
+    const setNdc = (clientX: number, clientY: number) => {
       const box = container.getBoundingClientRect();
       pointer.set(((clientX - box.left) / box.width) * 2 - 1, -((clientY - box.top) / box.height) * 2 + 1);
+    };
+    const setPointer = (clientX: number, clientY: number) => {
+      setNdc(clientX, clientY);
       ray.setFromCamera(pointer, camera);
     };
     const onPlane = (plane: THREE.Plane) => (ray.ray.intersectPlane(plane, hit) ? hit : null);
@@ -133,9 +193,30 @@ export function useRoomScene(
     /* --------------------------------------------------- the room itself */
     let active = SCENES[firstScene.current];
     let room: THREE.Group | null = null;
+    /*
+     * Built once each, then kept.
+     *
+     * Swapping used to dispose the room being left and build the one being
+     * entered from nothing, which was affordable when a room was a hundred
+     * boxes and is not now that it is a hundred boxes plus a quarter of a
+     * million rays and a cubemap capture. Two finished rooms are a couple of
+     * megabytes of geometry between them, and holding both turns the switch
+     * from a visible hitch into a cut.
+     */
+    const rooms = new Map<SceneId, { group: THREE.Group; probe: Probe }>();
     /** False until the reader moves the camera themselves. */
     let touched = false;
+    /** Square on to the board, two axes. */
+    let cork = false;
+    /** What `touched` was when the cork view was entered, to go back to. */
+    let roomTouched = false;
     let needsRender = true;
+
+    /** The room is drawn on demand, so anything that lands later has to ask. */
+    const invalidate = () => {
+      renderer.shadowMap.needsUpdate = true;
+      needsRender = true;
+    };
 
     /** Board pixels ⇄ world: the board hangs at one unit per CSS pixel. */
     const boardToWorld = (x: number, y: number) =>
@@ -152,21 +233,112 @@ export function useRoomScene(
       orbit.set(new THREE.Vector3(...f.target), f.radius, f.theta, f.phi, instant);
     };
 
+    /**
+     * Where the cork view may go — for the board as it hangs now, seen through
+     * the window it is being seen through now.
+     *
+     * Both of those move: the board hangs in a different place in each room,
+     * and the lens widens as the viewport narrows, which changes how far back
+     * the whole board needs the camera to be. So this is solved fresh on every
+     * entry, resize and change of room rather than kept as a constant.
+     */
+    const corkLeash = () => {
+      const b = active.board;
+      const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
+      /* Everything horizontal here is measured against the part of the window
+         the sidebar is not sitting on. */
+      const insetFrac = clamp(insetRef.current / Math.max(1, container.clientWidth), 0, 0.5);
+      const wide = (camera.aspect || 1.6) * (1 - insetFrac);
+      const fitH = BOARD_H / 2 / tanHalf;
+      const fit = Math.max(fitH, BOARD_W / 2 / tanHalf / wide);
+      /* The far limit belongs as much to the room as to the board: there is a
+         wall behind the camera, and through a tall narrow window it is reached
+         before the board's own edges are. The near one is where the plaster
+         the board hangs on would be crossed. */
+      const minRadius = Math.max(CORK_VIEW.minRadius, EYE_BOX.minZ - b.z);
+      const maxRadius = Math.max(minRadius, Math.min(fit * CORK_VIEW.pullback, EYE_BOX.maxZ - b.z));
+      return {
+        leash: {
+          centreX: b.centreX,
+          centreY: b.centreY,
+          z: b.z,
+          /* A little past the edge on every side, because an item is allowed
+             to overhang one and you have to be able to see it to fix it. */
+          halfW: BOARD_W / 2 + CORK_VIEW.margin,
+          halfH: BOARD_H / 2 + CORK_VIEW.margin,
+          insetFrac,
+          minRadius,
+          maxRadius,
+        },
+        /* Far enough back for the board, or for as much of it as is worth
+           seeing at once — whichever is nearer. See `minFill`. */
+        start: Math.min(fit * CORK_VIEW.padding, fitH / CORK_VIEW.minFill),
+      };
+    };
+
+    /** Move in on the board, square on. Also re-frames if already there. */
+    const enterCork = (instant: boolean) => {
+      if (!cork) roomTouched = touched;
+      cork = true;
+      const { leash, start } = corkLeash();
+      orbit.enterCork(leash, start, camera, instant);
+      touched = false;
+      needsRender = true;
+    };
+
+    /** Back to the room, and to whatever was true of the camera before. */
+    const leaveCork = () => {
+      if (!cork) return;
+      cork = false;
+      touched = roomTouched;
+      if (!orbit.exitCork()) openOn(false);
+      needsRender = true;
+    };
+
+    applyView.current = (v) => (v === 'cork' ? enterCork(false) : leaveCork());
+    reframe.current = () => {
+      if (!cork) return;
+      if (touched) orbit.releash(corkLeash().leash, camera);
+      else enterCork(false);
+    };
+
     const applyScene = (id: SceneId, animated: boolean) => {
       if (room && active.id === id) return;
-      if (room) {
-        scene.remove(room);
-        disposeScene(room);
-      }
+      if (room) scene.remove(room);
       active = SCENES[id];
-      room = active.build();
-      scene.add(room);
 
       scene.background = new THREE.Color(active.background);
-      scene.environmentIntensity = active.envIntensity;
       renderer.toneMappingExposure = active.exposure;
       container.style.backgroundColor = active.pageColour;
       boardEl.dataset.scene = id;
+
+      let entry = rooms.get(id);
+      if (!entry) {
+        const group = active.build(invalidate);
+        scene.add(group);
+        /* Captured with the room in the scene and the props out of it: a mug
+           left in the reflection would still be there after being moved, and
+           a mirror that remembers is worse than one that only approximates. */
+        renderer.shadowMap.needsUpdate = true;
+        entry = {
+          group,
+          probe: captureProbe(
+            renderer,
+            pmrem,
+            scene,
+            new THREE.Vector3(...active.probeAt),
+            q.probe,
+            [props.group],
+            q.tier === 'high' ? 2 : 1,
+          ),
+        };
+        rooms.set(id, entry);
+      } else {
+        scene.add(entry.group);
+      }
+      room = entry.group;
+      scene.environment = entry.probe.texture;
+      scene.environmentIntensity = active.envIntensity;
 
       /* The two desks are different lengths, so anything left standing off the
          end of the shorter one is nudged back onto it. Only the mesh moves —
@@ -184,17 +356,31 @@ export function useRoomScene(
       boardPlane.constant = -active.board.z;
 
       touched = false;
-      openOn(!animated);
+      if (cork) {
+        /* The board moved to another wall. Re-frame on it where it is now, and
+           make the way back out land in the room we are in rather than in the
+           one we left. */
+        const f = active.framing(camera.aspect || 1.6);
+        camera.fov = f.fov;
+        camera.updateProjectionMatrix();
+        orbit.parkAt(new THREE.Vector3(...f.target), f.radius, f.theta, f.phi);
+        enterCork(!animated);
+      } else {
+        openOn(!animated);
+      }
       renderer.shadowMap.needsUpdate = true;
       needsRender = true;
     };
     swapScene.current = applyScene;
 
     /* ------------------------------------------------------------- props */
-    const props = buildProps(savedPropsRef.current);
+    const props = buildProps(savedPropsRef.current, invalidate);
     scene.add(props.group);
 
     applyScene(firstScene.current, false);
+    /* A change of graphics tier tears this whole effect down and builds it
+       again; the mode it was in is React's, and outlives that. */
+    if (viewRef.current === 'cork') enterCork(true);
 
     /* ------------------------------------------------------- the loop */
     let raf = 0;
@@ -215,13 +401,29 @@ export function useRoomScene(
      * need it — at most twice in a session, never back up, never mid-gesture
      * for its own sake.
      */
-    const DPR_STEPS = [1.6, 1.25, 1];
+    /* Multipliers on whatever the budget below works out to, rather than
+       ratios in their own right: the ceiling is the tier's business and this
+       is only the machine saying it cannot keep up with it. */
+    const DPR_SCALE = [1, 0.82, 0.66];
     let dprStep = 0;
     let slowFrames = 0;
 
     const applyDpr = () => {
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_STEPS[dprStep]));
-      renderer.setSize(container.clientWidth, container.clientHeight, false);
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      /*
+       * Two ceilings, because a ratio alone is not a budget.
+       *
+       * Device pixel ratio says how dense the panel is, not how many pixels
+       * there are: a phone at ratio three is a million of them, and a 4K
+       * display at ratio one is eight million. The cost of this scene is
+       * almost entirely the second number, so the second number is what gets
+       * capped — the ratio is then whatever fits under it.
+       */
+      const area = Math.max(1, w * h);
+      const ratio = Math.min(window.devicePixelRatio || 1, q.maxPixelRatio, Math.sqrt(q.maxPixels / area));
+      renderer.setPixelRatio(Math.max(0.62, ratio * DPR_SCALE[dprStep]));
+      renderer.setSize(w, h, false);
     };
 
     /** Set while the camera is in flight; see `.board-moving`. */
@@ -256,7 +458,7 @@ export function useRoomScene(
         // only a sustained struggle counts, so one hitch never costs a step
         if (dt > 0.028) slowFrames++;
         else slowFrames = Math.max(0, slowFrames - 1);
-        if (slowFrames > 24 && dprStep < DPR_STEPS.length - 1) {
+        if (slowFrames > 24 && dprStep < DPR_SCALE.length - 1) {
           dprStep++;
           applyDpr();
           slowFrames = 0;
@@ -299,17 +501,18 @@ export function useRoomScene(
       const h = container.clientHeight;
       if (!w || !h) return;
       camera.aspect = w / h;
-      camera.updateProjectionMatrix();
       applyDpr();
       css.setSize(w, h);
+      // A lens wide enough for a laptop takes in a metre of wall on a phone
+      // held upright, and there is nowhere further back to stand.
+      camera.fov = active.framing(camera.aspect).fov;
+      camera.updateProjectionMatrix();
       // Rotating a phone changes what the room can even fit; until the reader
       // has moved the camera themselves, re-frame rather than crop.
-      if (!touched) openOn(true);
-      else {
-        const f = active.framing(camera.aspect);
-        camera.fov = f.fov;
-        camera.updateProjectionMatrix();
-      }
+      if (cork) {
+        if (touched) orbit.releash(corkLeash().leash, camera);
+        else enterCork(true);
+      } else if (!touched) openOn(true);
       renderer.shadowMap.needsUpdate = true;
       needsRender = true;
     };
@@ -335,6 +538,12 @@ export function useRoomScene(
       return id ? (props.placed.find((p) => p.def.id === id) ?? null) : null;
     };
 
+    /** Where on the wall a screen point lands — what the cork view zooms about. */
+    const boardPointAt = (clientX: number, clientY: number) => {
+      setPointer(clientX, clientY);
+      return onPlane(boardPlane);
+    };
+
     const down = (e: React.PointerEvent) => {
       const el = e.target as HTMLElement;
       if (el.closest('[data-board-chrome]') || el.closest('[data-memory-id]')) return;
@@ -352,7 +561,12 @@ export function useRoomScene(
       lastY = e.clientY;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
-      const prop = e.shiftKey || e.button === 1 ? null : propAt(e.clientX, e.clientY);
+      /* In the cork view the room's furniture is not pickable, and a drag is
+         a slide rather than a swing. Both for the same reason: a gesture aimed
+         at the board that lands a few pixels off it should do nothing you have
+         to undo — not move a mug, not turn the room. */
+      const flat = cork || e.shiftKey || e.button === 1;
+      const prop = flat ? null : propAt(e.clientX, e.clientY);
       if (prop) {
         mode = 'prop';
         dragged = prop;
@@ -361,7 +575,7 @@ export function useRoomScene(
         setGrabbing(true);
         return;
       }
-      mode = e.shiftKey || e.button === 1 ? 'pan' : 'orbit';
+      mode = flat ? 'pan' : 'orbit';
       setGrabbing(true);
     };
 
@@ -372,7 +586,12 @@ export function useRoomScene(
         const [a, b] = [...pointers.values()];
         const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
         touched = true;
-        orbit.dolly(d / pinchDist);
+        const factor = d / pinchDist;
+        // square on, a pinch holds the cork between the fingers where it is
+        if (cork) {
+          setNdc((a.x + b.x) / 2, (a.y + b.y) / 2);
+          orbit.dollyAt(factor, pointer.x, pointer.y);
+        } else orbit.dolly(factor);
         pinchDist = d;
         return;
       }
@@ -422,37 +641,46 @@ export function useRoomScene(
       setGrabbing(false);
     };
 
-    /** Double-click anything to fly to it — the room's "zoom into items". */
+    /**
+     * Double-click the room to move in on it: a prop, or the cork.
+     *
+     * On the cork it does more than move in — it goes square on and stays
+     * there, because "closer to the board" and "done swinging the room about"
+     * are the same wish. Nothing here fires in the cork view: there is no
+     * third thing for a double-click to mean once you are already in front of
+     * the board, and a gesture that means nothing is better than one that
+     * surprises you.
+     */
     const dbl = (e: React.MouseEvent) => {
+      if (cork) return;
       const el = e.target as HTMLElement;
       if (el.closest('[data-board-chrome]')) return;
+      /* A memory opens on the first of the two clicks, so by the time the
+         second lands its card is over the board — and moving the camera
+         behind an open card is a change you cannot see happening. */
+      if (el.closest('[data-memory-id]')) return;
       const prop = propAt(e.clientX, e.clientY);
       if (prop) {
         touched = true;
         orbit.focus(new THREE.Box3().setFromObject(prop.group), camera, 2.1);
         return;
       }
-      setPointer(e.clientX, e.clientY);
-      const p = onPlane(boardPlane);
+      const p = boardPointAt(e.clientX, e.clientY);
       const b = active.board;
       if (p && Math.abs(p.x - b.centreX) < BOARD_W / 2 && Math.abs(p.y - b.centreY) < BOARD_H / 2) {
-        touched = true;
-        orbit.focus(
-          new THREE.Box3().setFromCenterAndSize(
-            new THREE.Vector3(b.centreX, b.centreY, b.z),
-            new THREE.Vector3(BOARD_W, BOARD_H, 100),
-          ),
-          camera,
-          1.18,
-        );
+        setView('cork');
       }
     };
 
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
       touched = true;
+      const factor = Math.exp(-e.deltaY * 0.0016);
       if (e.shiftKey) orbit.pan(-e.deltaY, 0, camera, container.clientHeight);
-      else orbit.dolly(Math.exp(-e.deltaY * 0.0016));
+      else if (cork) {
+        setNdc(e.clientX, e.clientY);
+        orbit.dollyAt(factor, pointer.x, pointer.y);
+      } else orbit.dolly(factor);
     };
     container.addEventListener('wheel', wheel, { passive: false });
 
@@ -490,8 +718,13 @@ export function useRoomScene(
         orbit.focus(boardBox(memoriesRef.current), camera, 1.25);
       },
       resetView() {
-        touched = false;
-        openOn(false);
+        /* In the cork view "reset" is the board, framed — going back to the
+           room is what the view control itself is for. */
+        if (cork) enterCork(false);
+        else {
+          touched = false;
+          openOn(false);
+        }
       },
       zoomBy(factor) {
         touched = true;
@@ -520,9 +753,22 @@ export function useRoomScene(
       handlers.current = null;
       api.current = null;
       swapScene.current = null;
+      applyView.current = null;
+      reframe.current = null;
+      for (const entry of rooms.values()) {
+        disposeScene(entry.group);
+        entry.probe.dispose();
+      }
+      rooms.clear();
+      cancelBakes();
+      disposeNeutral();
       pmrem.dispose();
-      if (room) disposeScene(room);
       disposeScene(props.group, false);
+      /* Textures are cached across builds and sized to the tier that built
+         them, so the one thing that must not survive a teardown is the cache:
+         a rebuild at another tier would otherwise reuse the old sizes and the
+         setting would appear to do nothing. */
+      disposeTextures();
       renderer.dispose();
       renderer.domElement.remove();
       // hand the board back so React still owns a node that is in the document
@@ -532,12 +778,23 @@ export function useRoomScene(
     // Built once. Memories, props, the room and the callbacks are all reached
     // through refs, so nothing here rebuilds a renderer to add a photograph.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerRef, boardRef, placeProp, select]);
+  }, [containerRef, boardRef, placeProp, select, setView, tier]);
 
   /* Changing room swaps the group under the same camera and renderer. */
   useEffect(() => {
     swapScene.current?.(sceneId, true);
   }, [sceneId]);
+
+  /* Changing the way of looking moves the same camera onto a different leash. */
+  useEffect(() => {
+    applyView.current?.(view);
+  }, [view]);
+
+  /* The sidebar coming or going changes how much of the board can be seen,
+     which is half of what the cork view's framing is solved against. */
+  useEffect(() => {
+    reframe.current?.();
+  }, [insetLeft]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => handlers.current?.down(e), []);
   const onPointerMove = useCallback((e: React.PointerEvent) => handlers.current?.move(e), []);

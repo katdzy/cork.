@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { COUNTER, ROOM } from './layout';
-import { bloom, box, cylinder, foliage, lightCone, pierced, still } from './parts';
-import { concrete, cork, fabric, oak, weave } from './textures';
+import { arc, bloom, box, cylinder, foliage, lightCone, lightPool, panel, pierced, shaft, still } from './parts';
+import { brushed, concrete, cork, fabric, oak, smears, weave } from './textures';
+import { quality } from './quality';
 
 /**
  * The studio: a concrete workspace some way up an office building.
@@ -184,19 +185,40 @@ export function buildStudio(): THREE.Group {
     metalness: 0,
     ...concrete(),
     normalScale: new THREE.Vector2(0.7, 0.7),
+    // sealed concrete is matt but not dead: it picks up the glazing faintly
+    envMapIntensity: 0.9,
   });
   const walnut = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.44,
+    envMapIntensity: 1.4,
     ...oak('walnut', { light: '#a2703f', dark: '#3a2110', repeat: [3, 1], bump: 1.5, seed: 4242 }),
   });
   const floorWood = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.52,
+    /* A hard floor under a wall of glass is mostly a picture of that glass.
+       Turning the reflection up past one is not physical, and is exactly what
+       a single-probe capture needs to read as a reflection at all — spread
+       over the whole floor it lands as the long bright smear the window
+       actually leaves, which is the thing being imitated. */
+    envMapIntensity: 1.8,
     ...oak('darkfloor', { light: '#7d5230', dark: '#2a170c', repeat: 5, bump: 2.4, seed: 1717 }),
   });
-  const ink = new THREE.MeshStandardMaterial({ color: 0x1a1918, roughness: 0.44, metalness: 0.28 });
-  const steel = new THREE.MeshStandardMaterial({ color: 0x24231f, roughness: 0.36, metalness: 0.7 });
+  const ink = new THREE.MeshStandardMaterial({
+    color: 0x1a1918,
+    roughness: 0.44,
+    metalness: 0.28,
+    envMapIntensity: 1.6,
+  });
+  const steel = new THREE.MeshStandardMaterial({
+    color: 0x24231f,
+    roughness: 0.36,
+    metalness: 0.7,
+    envMapIntensity: 1.9,
+    ...brushed(),
+    normalScale: new THREE.Vector2(0.6, 0.6),
+  });
   // Upholstery in a dark room. The first pass used the grey it *is* in
   // daylight, which put the brightest thing in the frame in the foreground,
   // below the board, doing nothing.
@@ -208,9 +230,8 @@ export function buildStudio(): THREE.Group {
   });
 
   /* -- shell ------------------------------------------------------------ */
-  const back = new THREE.Mesh(new THREE.PlaneGeometry(W, H), conc);
+  const back = panel(W, H, conc);
   back.position.set(0, H / 2, 0);
-  back.receiveShadow = true;
   g.add(still(back));
 
   /*
@@ -255,7 +276,23 @@ export function buildStudio(): THREE.Group {
   view.position.set(gx + 2600, glazeY + 900, glazeZ);
   g.add(still(view));
 
-  // the glass itself: barely there, but it catches the room back
+  /*
+   * The glass, in two layers, because one cannot be both.
+   *
+   * A transparent material in three.js scales everything it produces by its
+   * opacity — the reflection included. So a pane faint enough to see the city
+   * through is a pane with no reflection in it, and a pane that reflects the
+   * room is a wall. The honest fix is `transmission`, which renders the whole
+   * scene to a second buffer so the glass can refract it: one more full pass,
+   * every frame, for a window.
+   *
+   * Two draws do it instead. A nearly clear tint for the body of the pane, and
+   * over it a black, fully metallic sheet blended additively — black diffuse
+   * plus full metalness leaves nothing but the environment term, so what it
+   * adds is the reflection and only the reflection. The smear map breaks that
+   * reflection up the way a year of weather does, which is also what keeps a
+   * single captured probe from being caught out.
+   */
   const glass = new THREE.Mesh(
     new THREE.PlaneGeometry(glazeD, glazeH),
     new THREE.MeshStandardMaterial({
@@ -272,6 +309,29 @@ export function buildStudio(): THREE.Group {
   glass.rotation.y = -Math.PI / 2;
   glass.position.set(gx - 24, glazeY, glazeZ);
   g.add(still(glass));
+
+  const sheen = new THREE.Mesh(
+    new THREE.PlaneGeometry(glazeD, glazeH),
+    new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      metalness: 1,
+      roughness: 0.08,
+      envMapIntensity: 1.1,
+      ...smears(),
+      normalScale: new THREE.Vector2(0.25, 0.25),
+      transparent: true,
+      // added on top of a view that is already the brightest thing in the
+      // room, so it takes very little to turn a window into a white rectangle
+      opacity: 0.32,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  sheen.rotation.y = -Math.PI / 2;
+  sheen.position.set(gx - 30, glazeY, glazeZ);
+  sheen.renderOrder = 6;
+  g.add(still(sheen));
 
   // Frame. These cast, and the bars of shadow they lay across the floor and
   // the desk are most of what makes the window read as a window.
@@ -299,14 +359,14 @@ export function buildStudio(): THREE.Group {
     roughness: 0.9,
     color: 0xd8dde2,
   });
-  const far = new THREE.Mesh(new THREE.PlaneGeometry(doorD + 4200, DOOR.head + 1600), beyondMat);
+  const far = panel(doorD + 4200, DOOR.head + 1600, beyondMat);
   far.rotation.y = Math.PI / 2;
   far.position.set(dx - CORRIDOR.depth, (DOOR.head + 1600) / 2, doorZ);
-  far.receiveShadow = true;
   g.add(still(far));
 
-  const corridorFloor = new THREE.Mesh(
-    new THREE.PlaneGeometry(CORRIDOR.depth, doorD + 4200),
+  const corridorFloor = panel(
+    CORRIDOR.depth,
+    doorD + 4200,
     new THREE.MeshStandardMaterial({ color: 0x4b4a48, roughness: 0.72 }),
   );
   corridorFloor.rotation.x = -Math.PI / 2;
@@ -322,8 +382,9 @@ export function buildStudio(): THREE.Group {
     new THREE.BoxGeometry(CORRIDOR.depth - 500, 46, 420),
     new THREE.MeshBasicMaterial({ color: 0xf6f9ff, toneMapped: false }),
   ).translateX(dx - CORRIDOR.depth / 2).translateY(DOOR.head + 1490).translateZ(doorZ)));
+  const corridorWall = new THREE.MeshStandardMaterial({ color: 0x6a6b69, roughness: 0.9 });
   for (const side of [-1, 1]) {
-    g.add(still(box(CORRIDOR.depth, DOOR.head + 1600, 60, new THREE.MeshStandardMaterial({ color: 0x6a6b69, roughness: 0.9 }),
+    g.add(still(box(CORRIDOR.depth, DOOR.head + 1600, 60, corridorWall,
       dx - CORRIDOR.depth / 2, (DOOR.head + 1600) / 2, doorZ + side * ((doorD + 4200) / 2))));
   }
 
@@ -337,19 +398,14 @@ export function buildStudio(): THREE.Group {
   doorGlow.position.set(dx - 320, DOOR.head - 900, doorZ);
   g.add(doorGlow);
 
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), floorWood);
+  const floor = panel(W, D, floorWood);
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, 0, D / 2);
-  floor.receiveShadow = true;
   g.add(still(floor));
 
-  const ceil = new THREE.Mesh(
-    new THREE.PlaneGeometry(W, D),
-    new THREE.MeshStandardMaterial({ color: 0x2b2a29, roughness: 1 }),
-  );
+  const ceil = panel(W, D, new THREE.MeshStandardMaterial({ color: 0x2b2a29, roughness: 1 }));
   ceil.rotation.x = Math.PI / 2;
   ceil.position.set(0, H, D / 2);
-  ceil.receiveShadow = true;
   g.add(still(ceil));
 
   /* -- the board's frame: a thin dark bezel, not a moulding ------------- */
@@ -375,6 +431,17 @@ export function buildStudio(): THREE.Group {
   }), cx, cy, STUDIO_BOARD.z - 28)));
 
   /* -- pendants --------------------------------------------------------- */
+  /* Hoisted out of the loop, like every other material here. Two identical
+     materials that are not the *same* material are two draw calls the merge
+     cannot fold, because what it batches by is material identity. */
+  const shadeMat = new THREE.MeshStandardMaterial({
+    color: 0x121110,
+    roughness: 0.4,
+    metalness: 0.35,
+    envMapIntensity: 1.5,
+    side: THREE.DoubleSide,
+  });
+  const mouthMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });
   const lights: THREE.SpotLight[] = [];
   for (const lx of LAMP_X) {
     // cord, from the ceiling
@@ -386,16 +453,13 @@ export function buildStudio(): THREE.Group {
     // the shade: a dome, open underneath, tipped a little toward the board
     const shade = new THREE.Group();
     const dome = new THREE.Mesh(
-      new THREE.SphereGeometry(300, 22, 12, 0, Math.PI * 2, 0, Math.PI * 0.52),
-      new THREE.MeshStandardMaterial({ color: 0x121110, roughness: 0.4, metalness: 0.35, side: THREE.DoubleSide }),
+      new THREE.SphereGeometry(300, arc(22), arc(12), 0, Math.PI * 2, 0, Math.PI * 0.52),
+      shadeMat,
     );
     dome.castShadow = true;
     shade.add(dome);
     // the hot mouth, which is what the eye reads as "switched on"
-    const mouth = new THREE.Mesh(
-      new THREE.CircleGeometry(268, 24),
-      new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false }),
-    );
+    const mouth = new THREE.Mesh(new THREE.CircleGeometry(268, arc(24)), mouthMat);
     mouth.rotation.x = Math.PI / 2;
     mouth.position.y = -12;
     shade.add(mouth);
@@ -423,8 +487,11 @@ export function buildStudio(): THREE.Group {
     const spot = new THREE.SpotLight(0xffc98d, 1.5e7, 0, 0.62, 0.75, 2);
     spot.position.set(lx, LAMP_Y - 60, LAMP_Z);
     spot.target.position.set(lx, cy - 300, 0);
-    spot.castShadow = true;
-    spot.shadow.mapSize.set(1024, 1024);
+    /* Each pendant is a second shadow pass over the whole room. Daylight is
+       the key here and draws the shadows that matter; on a machine that has
+       to choose, these are what it gives up. */
+    spot.castShadow = quality().spotShadows;
+    spot.shadow.mapSize.setScalar(quality().spotShadow || 512);
     spot.shadow.bias = -0.0008;
     spot.shadow.normalBias = 30;
     spot.shadow.camera.near = 200;
@@ -442,14 +509,14 @@ export function buildStudio(): THREE.Group {
   }
 
   // books lying and leaning on it
+  const cloth = [0x2f2a26, 0x3d3630, 0x27302c, 0x4a3d31, 0x232323].map(
+    (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.86 }),
+  );
   let px = cx - 1500;
   for (let i = 0; i < 7; i++) {
     const w = 52 + ((i * 37) % 40);
     const h = 300 + ((i * 53) % 150);
-    const b = box(w, h, 300, new THREE.MeshStandardMaterial({
-      color: [0x2f2a26, 0x3d3630, 0x27302c, 0x4a3d31, 0x232323][i % 5],
-      roughness: 0.86,
-    }), px + w / 2, LEDGE.top + h / 2, 210);
+    const b = box(w, h, 300, cloth[i % 5], px + w / 2, LEDGE.top + h / 2, 210);
     if (i === 6) b.rotation.z = 0.2;
     g.add(still(b));
     px += w + 6;
@@ -464,7 +531,7 @@ export function buildStudio(): THREE.Group {
   arm.rotation.z = 0.24;
   g.add(still(arm));
   const head = new THREE.Mesh(
-    new THREE.SphereGeometry(150, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    new THREE.SphereGeometry(150, arc(16), arc(10), 0, Math.PI * 2, 0, Math.PI * 0.55),
     new THREE.MeshStandardMaterial({ color: 0x16150f, roughness: 0.42, metalness: 0.4, side: THREE.DoubleSide }),
   );
   head.position.set(cx - 2240, LEDGE.top + 590, 300);
@@ -541,7 +608,7 @@ export function buildStudio(): THREE.Group {
   sun.position.set(gx + 9000, 8600, glazeZ + 2600);
   sun.target.position.set(-600, 2500, 2200);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.setScalar(quality().sunShadow);
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 30;
   sun.shadow.radius = 2;
@@ -554,6 +621,27 @@ export function buildStudio(): THREE.Group {
   sc.far = 30000;
   sc.updateProjectionMatrix();
   g.add(sun, sun.target);
+
+  /*
+   * Bars of late air, one per bay of the curtain wall.
+   *
+   * The mullions are real geometry and already lay real shadows across the
+   * floor; what is missing is the light between the window and that floor.
+   * The gaps come free — a shaft is placed at the centre of each bay and
+   * nowhere else, so the dark stripes between them are the mullions, at the
+   * spacing the mullions actually have.
+   */
+  if (quality().shafts) {
+    const towards = new THREE.Vector3().copy(sun.target.position).sub(sun.position).normalize();
+    /* Short, so they die out in the open span beside the desk rather than
+       reaching the board and laying a straight-edged stripe across the cork —
+       a card cut off by the depth test looks exactly like a card. */
+    for (let z = GLAZING.near + GLAZING.bay / 2; z < GLAZING.far - 600; z += GLAZING.bay) {
+      g.add(shaft({ x: gx - 300, y: GLAZING.transom + 900, z }, towards, 3000, 1050, 0xffd9a8, 0.3));
+    }
+    // and the warm patch it leaves on the boards inside the glazing
+    g.add(lightPool({ x: gx - 1500, y: 8, z: glazeZ - 700 }, 3800, 6400, 0xffc98d, 0.34));
+  }
 
   /*
    * And the rest.

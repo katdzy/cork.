@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { Board, Memory, PersistedState, PropPlacement, RoomScene } from './types';
-import { storage, releaseAsset } from './storage';
+import type { Board, Memory, PersistedState, PropPlacement, RoomScene, ViewMode } from './types';
+import { storage, releaseAsset, storageUnreadable } from './storage';
 import { buildSeedState } from './seed';
 import { uid } from './utils';
 
@@ -26,6 +26,9 @@ interface CorkState {
   openId: string | null;
   query: string;
   filter: FilterMode;
+  /* Not persisted, on purpose: which way you happen to be looking at the
+     board right now is not a property of the board. */
+  view: ViewMode;
   toasts: Toast[];
 
   hydrate(): Promise<void>;
@@ -39,6 +42,7 @@ interface CorkState {
   updateMemory(id: string, patch: Partial<Memory>, opts?: { silent?: boolean }): void;
   deleteMemory(id: string): void;
   toggleFavorite(id: string): void;
+  toggleLock(id: string): void;
   bringToFront(id: string): number;
   nextZ(): number;
 
@@ -48,6 +52,7 @@ interface CorkState {
   setFilter(f: FilterMode): void;
   placeProp(id: string, at: PropPlacement): void;
   setScene(scene: RoomScene): void;
+  setView(view: ViewMode): void;
 
   toast(message: string, actionLabel?: string, action?: () => void): void;
   dismissToast(id: string): void;
@@ -63,6 +68,17 @@ const persistable = (s: CorkState): PersistedState => ({
   props: s.props,
   scene: s.scene,
 });
+
+/**
+ * The first read, kept.
+ *
+ * `hydrate` is called from an effect, and StrictMode runs effects twice — so
+ * the store was opening the database, parsing a board and building a second
+ * seed nobody would see, every time in development. Harmless while all of that
+ * was silent; less so now that failing to read has something to say about it,
+ * which it was saying twice. A store is not a component: it is hydrated once.
+ */
+let hydration: Promise<void> | null = null;
 
 let saveTimer: number | undefined;
 function schedulePersist(get: () => CorkState) {
@@ -85,20 +101,11 @@ export const useCork = create<CorkState>((set, get) => ({
   openId: null,
   query: '',
   filter: 'board',
+  view: 'room',
   toasts: [],
 
-  async hydrate() {
-    const saved = await storage.loadState();
-    const state = saved ?? buildSeedState();
-    set({
-      boards: state.boards,
-      memories: state.memories,
-      activeBoardId: state.activeBoardId || state.boards[0]?.id || '',
-      props: state.props ?? {},
-      scene: state.scene ?? 'kitchen',
-      ready: true,
-    });
-    if (!saved) void storage.saveState(state);
+  hydrate() {
+    return (hydration ??= firstLoad(set, get));
   },
 
   setActiveBoard(id, keepFilter = false) {
@@ -214,6 +221,14 @@ export const useCork = create<CorkState>((set, get) => ({
     get().updateMemory(id, { favorite: !m.favorite });
   },
 
+  /* Silent: pinning something down is not something happening *to* the
+     memory, so it should not push it up a "recently added" list. */
+  toggleLock(id) {
+    const m = get().memories.find((x) => x.id === id);
+    if (!m) return;
+    get().updateMemory(id, { locked: !m.locked }, { silent: true });
+  },
+
   bringToFront(id) {
     const z = get().nextZ();
     get().updateMemory(id, { zIndex: z }, { silent: true });
@@ -239,6 +254,10 @@ export const useCork = create<CorkState>((set, get) => ({
   setScene(scene) {
     set({ scene });
     schedulePersist(get);
+  },
+
+  setView(view) {
+    set({ view });
   },
 
   placeProp(id, at) {
@@ -269,8 +288,35 @@ export const useCork = create<CorkState>((set, get) => ({
       openId: null,
       query: '',
       filter: 'board',
+      view: 'room',
     });
     await storage.saveState(fresh);
   },
 }));
 
+/** The body of `hydrate`, out here because it is only ever run once. */
+async function firstLoad(
+  set: (partial: Partial<CorkState>) => void,
+  get: () => CorkState,
+): Promise<void> {
+  const saved = await storage.loadState();
+  const state = saved ?? buildSeedState();
+  set({
+    boards: state.boards,
+    memories: state.memories,
+    activeBoardId: state.activeBoardId || state.boards[0]?.id || '',
+    props: state.props ?? {},
+    scene: state.scene ?? 'kitchen',
+    ready: true,
+  });
+  /* A board that isn't there gets written down so the demo survives a
+     reload. A board that could not be *read* does not: see `storage.ts`. */
+  if (saved) return;
+  if (!storageUnreadable()) {
+    void storage.saveState(state);
+    return;
+  }
+  /* And say so, because the alternative is somebody spending an evening
+     arranging a board that was never going to be there in the morning. */
+  get().toast('Couldn’t open your board — changes here won’t be saved');
+}

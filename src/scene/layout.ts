@@ -174,6 +174,45 @@ export const EYE_BOX = {
   maxZ: ROOM.depth - 600,
 } as const;
 
+/**
+ * The cork view's leash.
+ *
+ * Square on to the board, the camera keeps two degrees of freedom — slide and
+ * zoom — and the numbers it needs are different from the room's. `margin` is
+ * how far past the board's edge the frame may stray, and it exists because an
+ * item is allowed to overhang the edge a little; `padding` is the sliver of
+ * wall left around the board when the view first lands on it.
+ *
+ * `minRadius` is lower than the room's because there is nothing to bump into:
+ * the camera is on the board's own axis, so the only thing between it and the
+ * cork is air. It still has to clear `EYE_BOX.minZ`, which the scene folds in
+ * — the board does not hang at the same depth in both rooms.
+ */
+export const CORK_VIEW = {
+  margin: 190,
+  padding: 1.05,
+  /** How far back the view may be pulled before the board stops being the subject. */
+  pullback: 1.3,
+  /**
+   * The least of the frame's height the board may take up when the view lands.
+   *
+   * "Fit the whole board" is the obvious rule and it is the wrong one on a
+   * phone held upright. The board is half again as wide as it is tall and the
+   * screen is twice as tall as it is wide, so fitting its width puts the
+   * camera far enough back that the board covers under a third of the height
+   * and everything pinned to it is four millimetres across — a view of a board
+   * rather than a view for working on one, and barely closer than the room it
+   * was entered from.
+   *
+   * So the pullback stops here and the rest is left to the pan. On anything
+   * wider than about four to three the whole board fits inside this anyway and
+   * the cap never binds; it is a floor under the worst shape, not a framing
+   * rule in its own right.
+   */
+  minFill: 0.62,
+  minRadius: 900,
+} as const;
+
 export const TARGET_BOUNDS = {
   minX: -ROOM.halfWidth + 500,
   maxX: ROOM.halfWidth - 500,

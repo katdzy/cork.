@@ -15,7 +15,9 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose(): v
   const updateMemory = useCork((s) => s.updateMemory);
   const deleteMemory = useCork((s) => s.deleteMemory);
   const toggleFavorite = useCork((s) => s.toggleFavorite);
+  const toggleLock = useCork((s) => s.toggleLock);
   const board = useCork((s) => s.boards.find((b) => b.id === memory.boardId));
+  const locked = Boolean(memory.locked);
 
   const mediaRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
@@ -329,16 +331,26 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose(): v
                 ))}
               </Picker>
 
-              <Picker label="Angle">
+              {/* The angle is a placement control like the drag and the handle,
+                  so the lock holds it too — anything else would mean the lock
+                  covers the ways you move a thing by accident but not the one
+                  sitting in the panel you opened to edit it. The release is
+                  two rows down, which is as far as it should ever be. */}
+              <Picker label={locked ? 'Angle · held' : 'Angle'}>
                 <input
                   type="range"
                   min={-18}
                   max={18}
                   step={0.5}
                   value={memory.rotation}
+                  disabled={locked}
                   onChange={(e) => updateMemory(memory.id, { rotation: Number(e.target.value) })}
-                  className="h-[4px] w-full flex-1 cursor-pointer appearance-none rounded-full"
-                  style={{ background: 'rgba(120,92,62,0.25)', accentColor: '#a63a26' }}
+                  className="h-[4px] w-full flex-1 appearance-none rounded-full disabled:cursor-not-allowed disabled:opacity-45"
+                  style={{
+                    background: 'rgba(120,92,62,0.25)',
+                    accentColor: locked ? '#5f7f99' : '#a63a26',
+                    cursor: locked ? undefined : 'pointer',
+                  }}
                 />
               </Picker>
             </>
@@ -367,6 +379,30 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose(): v
                 strokeWidth="1.4"
                 fill={memory.favorite ? 'currentColor' : 'none'}
                 strokeLinejoin="round"
+              />
+            </IconButton>
+            <IconButton
+              label={locked ? 'Unlock — let it move again' : 'Lock it where it is'}
+              active={locked}
+              activeColor="#5f7f99"
+              onClick={() => toggleLock(memory.id)}
+            >
+              <path
+                d={locked ? 'M5.3 7.1V5.3a2.7 2.7 0 0 1 5.4 0v1.8' : 'M5.3 7.1V5.3a2.75 2.75 0 0 1 5.4-.75'}
+                stroke="currentColor"
+                strokeWidth="1.45"
+                strokeLinecap="round"
+                fill="none"
+              />
+              <rect
+                x="3.5"
+                y="7.1"
+                width="9"
+                height="5.8"
+                rx="1.5"
+                stroke="currentColor"
+                strokeWidth="1.45"
+                fill="none"
               />
             </IconButton>
             <IconButton
@@ -447,26 +483,30 @@ const IconButton = ({
   onClick,
   children,
   active,
+  activeColor = '#bd4f3c',
   danger,
 }: {
   label: string;
   onClick(): void;
   children: React.ReactNode;
   active?: boolean;
+  /** Favourite is brick; held is not. */
+  activeColor?: string;
   danger?: boolean;
 }) => (
   <button
     onClick={onClick}
     aria-label={label}
     title={label}
+    aria-pressed={active}
     className={`grid h-[38px] w-[38px] place-items-center rounded-full transition-colors ${
       active
-        ? 'text-[#bd4f3c]'
+        ? ''
         : danger
           ? 'text-[#8a7466] hover:text-[#a83f2c]'
           : 'text-[#6b5a45] hover:text-[#241d18]'
     }`}
-    style={{ background: 'rgba(120,92,62,0.13)' }}
+    style={{ background: 'rgba(120,92,62,0.13)', ...(active ? { color: activeColor } : null) }}
   >
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       {children}

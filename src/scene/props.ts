@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { COUNTER } from './layout';
 import { foliage } from './parts';
+import { bakeLight, mergeStatic } from './bake';
+import { quality } from './quality';
 import { oak, weave } from './textures';
 
 /**
@@ -214,18 +216,55 @@ export interface PlacedProp {
   group: THREE.Group;
 }
 
-/** Build every prop, put it where it belongs, and mark it as pickable. */
-export function buildProps(saved: Record<string, { x: number; z: number; rotation: number }>): {
-  group: THREE.Group;
-  placed: PlacedProp[];
-} {
+/**
+ * Build every prop, put it where it belongs, and mark it as pickable.
+ *
+ * Each one is traced against itself before it goes in. The room's bake cannot
+ * help here — a prop is the one thing in the scene that moves, so any
+ * occlusion baked from its surroundings would be a lie the moment it was
+ * picked up and put down somewhere else. What is true wherever it stands is
+ * its own shape: the crease under a mug's handle, the dark inside a crate, the
+ * gap between two books. Adding an implicit floor at its feet brings the last
+ * one in — the contact shadow where it meets the wood — because the only place
+ * a prop is ever put down is on a surface.
+ *
+ * Then it is folded to one mesh per material, like the room, but relative to
+ * its own group so that it can still be carried around afterwards.
+ */
+export function buildProps(
+  saved: Record<string, { x: number; z: number; rotation: number }>,
+  settled: () => void,
+): { group: THREE.Group; placed: PlacedProp[] } {
   const group = new THREE.Group();
   const placed: PlacedProp[] = [];
+  // A prop is a few hundred vertices against a few hundred triangles, so its
+  // share of the budget buys it a far finer trace than the same share buys a
+  // wall. Nine of them still come to less than the room.
+  const budget = Math.round(quality().rayBudget * 0.035);
+
   for (const def of PROPS) {
     const g = def.build();
     const at = saved[def.id];
     g.position.set(at?.x ?? def.x, COUNTER.top, at?.z ?? def.z);
     g.rotation.y = at?.rotation ?? def.rotation;
+
+    bakeLight(g, {
+      rayBudget: budget,
+      ground: COUNTER.top,
+      floor: 0.42,
+      bleed: 0.35,
+      settled: () => {
+        mergeStatic(g);
+        /* The merge replaces the meshes, so the id they are picked by has to
+           go on again — a prop nobody can grab is a worse bug than a prop
+           that takes a moment to shade. */
+        g.traverse((o) => {
+          o.userData.propId = def.id;
+        });
+        settled();
+      },
+    });
+
     g.userData.propId = def.id;
     g.traverse((o) => {
       o.userData.propId = def.id;

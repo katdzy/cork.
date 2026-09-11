@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality, texSize } from './quality';
 
 /**
  * Every surface in the room, drawn once into a canvas.
@@ -16,11 +17,26 @@ import * as THREE from 'three';
 
 const cache = new Map<string, THREE.Texture>();
 
-function canvas(size: number, draw: (ctx: CanvasRenderingContext2D, s: number) => void) {
+/**
+ * A square canvas, at whatever size the machine has been judged good for.
+ *
+ * Every size below is the one the surface was authored at; what actually gets
+ * allocated is that stepped down once or twice. It is the cheapest lever in
+ * the whole scene and the one that matters most on a phone — halving an edge
+ * quarters the upload, quarters the memory, and quarters the bandwidth every
+ * sample of it costs for the rest of the session. All the sizes are powers of
+ * two, so they stay that way after stepping and keep their mipmaps.
+ */
+function canvas(base: number, draw: (ctx: CanvasRenderingContext2D, s: number) => void, limit = 2) {
+  const size = texSize(base, limit);
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const ctx = c.getContext('2d')!;
-  draw(ctx, size);
+  /* Drawn in the authored coordinate space and scaled on the way in, so a
+     smaller texture is the same surface at lower resolution rather than the
+     same pixels showing a quarter of it. */
+  if (size !== base) ctx.scale(size / base, size / base);
+  draw(ctx, base);
   return c;
 }
 
@@ -29,10 +45,39 @@ function tex(c: HTMLCanvasElement, repeat: number | [number, number], srgb: bool
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   const [rx, ry] = Array.isArray(repeat) ? repeat : [repeat, repeat];
   t.repeat.set(rx, ry);
-  t.anisotropy = 8;
+  t.anisotropy = quality().anisotropy;
   t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   return t;
 }
+
+/**
+ * A height field, squeezed into the roughness range a material actually has.
+ *
+ * Height maps run the full nought-to-one, and handing one straight to
+ * `roughnessMap` says the dark grain of a board is a perfect mirror and the
+ * light grain is chalk. Oak is 0.3 to 0.55 everywhere; concrete never leaves
+ * the top quarter. Getting the band right is most of the difference between a
+ * surface that catches the window the way the real material would and one
+ * that looks sprayed with varnish — and it matters far more now that what it
+ * is catching is a capture of the room rather than a grey studio.
+ */
+function levels(height: HTMLCanvasElement, lo: number, hi: number) {
+  const s = height.width;
+  const out = document.createElement('canvas');
+  out.width = out.height = s;
+  const ctx = out.getContext('2d')!;
+  ctx.drawImage(height, 0, 0);
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.fillStyle = `rgb(${Math.round((hi - lo) * 255)},${Math.round((hi - lo) * 255)},${Math.round((hi - lo) * 255)})`;
+  ctx.fillRect(0, 0, s, s);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = `rgb(${Math.round(lo * 255)},${Math.round(lo * 255)},${Math.round(lo * 255)})`;
+  ctx.fillRect(0, 0, s, s);
+  return out;
+}
+
+/** A third texture per surface for a second-order cue: the first thing to go. */
+const wantRoughness = () => quality().roughnessMaps;
 
 /** Deterministic noise, so a reload gives the same room. */
 function rng(seed: number) {
@@ -155,7 +200,8 @@ export function oak(
     const h = oakHeight(seed);
     cache.set(ck, tex(tintFrom(h, light, dark), repeat, true));
     cache.set(`${ck}:n`, tex(heightToNormal(h, bump), repeat, false));
-    cache.set(`${ck}:r`, tex(h, repeat, false));
+    // finished wood: satin everywhere, a shade duller down the open pores
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.3, 0.6), repeat, false));
   }
   return {
     map: cache.get(ck),
@@ -189,7 +235,8 @@ export function plaster(): Maps {
       }
     });
     cache.set(`${ck}:n`, tex(heightToNormal(h, 1.5), 5, false));
-    cache.set(`${ck}:r`, tex(h, 5, false));
+    // limewash is chalk: matt from end to end, with the tooth a touch mattest
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.84, 1), 5, false));
   }
   return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
 }
@@ -268,7 +315,10 @@ export function concrete(): Maps {
     });
     cache.set(ck, tex(tintFrom(h, '#a9a9a6', '#3d3d3c'), [3, 4], true));
     cache.set(`${ck}:n`, tex(heightToNormal(h, 1.9), [3, 4], false));
-    cache.set(`${ck}:r`, tex(h, [3, 4], false));
+    /* Where the pour met the shuttering it took the board's polish, and where
+       it dried open it did not — the reason a concrete wall reads as poured
+       rather than painted is that the sheen is uneven across a single panel. */
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.72, 1), [3, 4], false));
   }
   return {
     map: cache.get(ck),
@@ -301,7 +351,8 @@ export function fabric(): Maps {
       }
     });
     cache.set(`${ck}:n`, tex(heightToNormal(h, 1.4), 26, false));
-    cache.set(`${ck}:r`, tex(h, 26, false));
+    // the crown of each thread catches; the gaps between them do not
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.74, 1), 26, false));
   }
   return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
 }
@@ -416,15 +467,18 @@ export function cork(): Maps {
       }
     };
 
-    const colour = canvas(size, (ctx) => paint(ctx, false));
-    const height = canvas(size, (ctx) => paint(ctx, true));
+    // one step down at most, wherever the tier stands: this is the surface the
+    // app is named after, and it is read from a hand's breadth away
+    const colour = canvas(size, (ctx) => paint(ctx, false), 1);
+    const height = canvas(size, (ctx) => paint(ctx, true), 1);
 
     // roughly a metre of cork per tile, which is about the granule scale a
     // sheet this size actually has
     const rep: [number, number] = [3.6, 2.4];
     cache.set(ck, tex(colour, rep, true));
     cache.set(`${ck}:n`, tex(heightToNormal(height, 2.6), rep, false));
-    cache.set(`${ck}:r`, tex(height, rep, false));
+    // granule faces have a faint sheen; the seams between them swallow light
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(height, 0.8, 1), rep, false));
   }
   return {
     map: cache.get(ck),
@@ -487,6 +541,113 @@ export function paper(): Maps {
     cache.set(`${ck}:n`, tex(heightToNormal(h, 1.1), 4, false));
   }
   return { normalMap: cache.get(`${ck}:n`) };
+}
+
+/* ------------------------------------------------------------------ glass */
+
+/**
+ * The state a window is actually in.
+ *
+ * Clean glass is a perfect mirror, and a perfect mirror is the one surface a
+ * single captured reflection cannot fake: it shows you the capture point, and
+ * the moment the camera moves off that point the reflection is visibly
+ * painted on. Real glass has been cleaned in arcs, rained on, and stood in a
+ * city for a year — and every one of those marks scatters the reflection just
+ * enough that the eye stops checking it against the room.
+ *
+ * So this is a roughness map, almost entirely: broad sweeps where a cloth
+ * went, a fine grime toward the edges of each pane, and the odd streak. It is
+ * the cheapest honest way to make a fake reflection survive being looked at.
+ */
+export function smears(): Maps {
+  const ck = 'smears';
+  if (!cache.has(`${ck}:n`)) {
+    const rnd = rng(31337);
+    const h = canvas(512, (ctx, s) => {
+      ctx.fillStyle = '#f4f4f4';
+      ctx.fillRect(0, 0, s, s);
+
+      // the arcs a cloth leaves, which is why they always look like this
+      ctx.strokeStyle = '#cfcfcf';
+      ctx.lineCap = 'round';
+      for (let i = 0; i < 18; i++) {
+        const cx = rnd() * s;
+        const cy = rnd() * s;
+        const r = 60 + rnd() * 180;
+        ctx.globalAlpha = 0.1 + rnd() * 0.16;
+        ctx.lineWidth = 6 + rnd() * 22;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, rnd() * 6, rnd() * 3 + 1);
+        ctx.stroke();
+      }
+
+      // grime, heaviest where the frame holds the pane
+      ctx.globalAlpha = 1;
+      const edge = ctx.createLinearGradient(0, 0, 0, s);
+      edge.addColorStop(0, 'rgba(190,190,190,0.5)');
+      edge.addColorStop(0.18, 'rgba(190,190,190,0)');
+      edge.addColorStop(0.84, 'rgba(190,190,190,0)');
+      edge.addColorStop(1, 'rgba(180,180,180,0.6)');
+      ctx.fillStyle = edge;
+      ctx.fillRect(0, 0, s, s);
+
+      // rain, and whatever the last storm left running down it
+      ctx.strokeStyle = '#d6d6d6';
+      for (let i = 0; i < 34; i++) {
+        const x = rnd() * s;
+        ctx.globalAlpha = 0.06 + rnd() * 0.12;
+        ctx.lineWidth = 1 + rnd() * 3;
+        ctx.beginPath();
+        ctx.moveTo(x, rnd() * s * 0.4);
+        ctx.lineTo(x + (rnd() - 0.5) * 18, s);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    });
+    cache.set(`${ck}:n`, tex(heightToNormal(h, 0.35), [1, 2], false));
+    // never matt, never a mirror: the band a pane of glass lives in
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.02, 0.26), [1, 2], false));
+  }
+  return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
+}
+
+/* ------------------------------------------------------------------ metal */
+
+/**
+ * Brushed steel and brass, drawn along the grain.
+ *
+ * Metal is the surface a captured reflection pays off on most and fails on
+ * worst. A mirror-smooth mullion reflects the probe exactly, from the one
+ * point the probe was taken at; a brushed one smears that reflection along
+ * the direction of the brushing, which is both what the real thing does and
+ * what hides the fact that there is only one capture. The anisotropy is in
+ * the drawing rather than in the shader: long thin scratches in a height
+ * field come out of the normal map as a directional smear for nothing.
+ */
+export function brushed(): Maps {
+  const ck = 'brushed';
+  if (!cache.has(`${ck}:n`)) {
+    const rnd = rng(880102);
+    const h = canvas(256, (ctx, s) => {
+      ctx.fillStyle = '#8c8c8c';
+      ctx.fillRect(0, 0, s, s);
+      for (let i = 0; i < 4200; i++) {
+        const y = rnd() * s;
+        const len = 20 + rnd() * 210;
+        const v = rnd() > 0.5 ? 255 : 0;
+        ctx.fillStyle = `rgba(${v},${v},${v},${0.03 + rnd() * 0.1})`;
+        ctx.fillRect(rnd() * s, y, len, 1);
+      }
+      // the odd deeper scratch, which is what stops it reading as fine sand
+      for (let i = 0; i < 40; i++) {
+        ctx.fillStyle = `rgba(0,0,0,${0.1 + rnd() * 0.18})`;
+        ctx.fillRect(rnd() * s, rnd() * s, 40 + rnd() * 200, 1);
+      }
+    });
+    cache.set(`${ck}:n`, tex(heightToNormal(h, 0.9), [3, 3], false));
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.18, 0.46), [3, 3], false));
+  }
+  return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
 }
 
 /** Everything above, dropped at once. */

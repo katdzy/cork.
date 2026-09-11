@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BOARD, HOOKS, RACK } from './layout';
-import { box, foliage, still } from './parts';
-import { cork, oak, paper, weave } from './textures';
+import { arc, box, foliage, still } from './parts';
+import { brushed, cork, oak, paper, weave } from './textures';
 
 /**
  * What else is on the wall: the mail rack, the hook rail with the keys on it,
@@ -93,6 +93,24 @@ export function buildFittings(): THREE.Group {
     normalScale: new THREE.Vector2(0.85, 0.85),
   }), cx, cy, BOARD.z - 28)));
 
+  /* Post, at the angles post always ends up at. Uniform envelopes read as a
+     single white bar laid across the rack; it is the raggedness of the tops
+     that says these are separate things somebody pushed in one at a time.
+
+     Five materials for ten envelopes, shared between the two pockets, so the
+     merge can fold each colour into one draw. */
+  const post: Array<[number, number, number, number, number]> = [
+    // colour, width fraction, height, x nudge, lean
+    [0xf4ecdc, 0.74, 520, -140, -0.16],
+    [0xccd6df, 0.58, 430, 120, -0.09],
+    [0xdcc094, 0.66, 600, -40, -0.2],
+    [0xf7f2e6, 0.48, 380, 260, -0.06],
+    [0xe4d6c2, 0.7, 470, 30, -0.13],
+  ];
+  const postMat = post.map(
+    ([c], i) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9 + (i % 2) * 0.05, ...paper() }),
+  );
+
   /* -- the mail rack ---------------------------------------------------- */
   const rx = RACK.left + RACK.width / 2;
   const ry = RACK.bottom + RACK.height / 2;
@@ -120,21 +138,8 @@ export function buildFittings(): THREE.Group {
     label.position.set(rx, py + pocketH * 0.42, RACK.depth + 46);
     g.add(still(label));
 
-    // Post, at the angles post always ends up at. Uniform envelopes read as a
-    // single white bar laid across the rack; it is the raggedness of the tops
-    // that says these are separate things somebody pushed in one at a time.
-    const paperMat = (c: number, rough: number) =>
-      new THREE.MeshStandardMaterial({ color: c, roughness: rough, ...paper() });
-    const post: Array<[number, number, number, number, number]> = [
-      // colour, width fraction, height, x nudge, lean
-      [0xf4ecdc, 0.74, 520, -140, -0.16],
-      [0xccd6df, 0.58, 430, 120, -0.09],
-      [0xdcc094, 0.66, 600, -40, -0.2],
-      [0xf7f2e6, 0.48, 380, 260, -0.06],
-      [0xe4d6c2, 0.7, 470, 30, -0.13],
-    ];
-    post.forEach(([c, frac, h, nudge, lean], i) => {
-      const e = box(RACK.width * frac, h, 14, paperMat(c, 0.9 + (i % 2) * 0.05),
+    post.forEach(([, frac, h, nudge, lean], i) => {
+      const e = box(RACK.width * frac, h, 14, postMat[i],
         rx + nudge, py + h * 0.46, RACK.depth * 0.34 + i * 20);
       e.rotation.set(lean, (i - 2) * 0.04, (i - 2) * 0.018);
       g.add(still(e));
@@ -142,18 +147,33 @@ export function buildFittings(): THREE.Group {
   }
 
   /* -- the hook rail ---------------------------------------------------- */
-  const black = new THREE.MeshStandardMaterial({ color: 0x22201e, roughness: 0.42, metalness: 0.2 });
-  const brass = new THREE.MeshStandardMaterial({ color: 0xba9251, roughness: 0.28, metalness: 0.9 });
+  const black = new THREE.MeshStandardMaterial({
+    color: 0x22201e,
+    roughness: 0.42,
+    metalness: 0.2,
+    envMapIntensity: 1.4,
+  });
+  /* Brushed, like the cup pulls downstairs, and for the same reason: a
+     polished curl of brass reflects the probe's own viewpoint, and is right
+     from exactly one place in the room. */
+  const brass = new THREE.MeshStandardMaterial({
+    color: 0xba9251,
+    roughness: 0.28,
+    metalness: 0.9,
+    envMapIntensity: 2.2,
+    ...brushed(),
+    normalScale: new THREE.Vector2(0.45, 0.45),
+  });
   g.add(still(box(HOOKS.width, HOOKS.height, 40, black, HOOKS.left + HOOKS.width / 2, HOOKS.y, 20)));
 
   for (let i = 0; i < 4; i++) {
     const hx = HOOKS.left + HOOKS.width * (0.16 + i * 0.23);
-    const stem = new THREE.Mesh(new THREE.CylinderGeometry(20, 20, 120, 8), brass);
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(20, 20, 120, arc(8)), brass);
     stem.position.set(hx, HOOKS.y + 10, 90);
     stem.rotation.x = Math.PI / 2;
     stem.castShadow = true;
     g.add(still(stem));
-    const curl = new THREE.Mesh(new THREE.TorusGeometry(52, 18, 6, 14, Math.PI), brass);
+    const curl = new THREE.Mesh(new THREE.TorusGeometry(52, 18, arc(6), arc(14), Math.PI), brass);
     curl.position.set(hx, HOOKS.y - 44, 140);
     curl.rotation.set(0, 0, Math.PI);
     curl.castShadow = true;
@@ -162,12 +182,12 @@ export function buildFittings(): THREE.Group {
 
   // keys, on the second hook
   const kx = HOOKS.left + HOOKS.width * 0.39;
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(64, 11, 6, 18), brass);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(64, 11, arc(6), arc(18)), brass);
   ring.position.set(kx, HOOKS.y - 118, 140);
   ring.castShadow = true;
   g.add(still(ring));
   [-0.22, 0.16].forEach((tilt, i) => {
-    const k = box(52, 240, 12, i ? brass : new THREE.MeshStandardMaterial({ color: 0x8d8f92, roughness: 0.35, metalness: 0.9 }),
+    const k = box(52, 240, 12, i ? brass : new THREE.MeshStandardMaterial({ color: 0x8d8f92, roughness: 0.35, metalness: 0.9, envMapIntensity: 2 }),
       kx + tilt * 150, HOOKS.y - 290, 140);
     k.rotation.z = tilt;
     g.add(still(k));
@@ -177,13 +197,13 @@ export function buildFittings(): THREE.Group {
   const bx = HOOKS.left + HOOKS.width + 760;
   const by = HOOKS.y + 620;
   const basket = new THREE.Mesh(
-    new THREE.CylinderGeometry(330, 250, 400, 20, 1, true),
+    new THREE.CylinderGeometry(330, 250, 400, arc(20), 1, true),
     new THREE.MeshStandardMaterial({ ...weave(), roughness: 0.94, side: THREE.DoubleSide }),
   );
   basket.position.set(bx, by, 330);
   basket.castShadow = true;
   g.add(still(basket));
-  const bottom = new THREE.Mesh(new THREE.CircleGeometry(250, 20), new THREE.MeshStandardMaterial({ ...weave(), roughness: 0.94 }));
+  const bottom = new THREE.Mesh(new THREE.CircleGeometry(250, arc(20)), new THREE.MeshStandardMaterial({ ...weave(), roughness: 0.94 }));
   bottom.rotation.x = -Math.PI / 2;
   bottom.position.set(bx, by - 200, 330);
   g.add(still(bottom));
@@ -194,7 +214,7 @@ export function buildFittings(): THREE.Group {
 
   // the peg it hangs from
   g.add(still(box(46, 46, 240, darkOak, bx, by + 470, 120)));
-  const cord = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 300, 5), new THREE.MeshStandardMaterial({ color: 0x9a8560, roughness: 1 }));
+  const cord = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 300, arc(5)), new THREE.MeshStandardMaterial({ color: 0x9a8560, roughness: 1 }));
   cord.position.set(bx, by + 330, 300);
   cord.rotation.z = -0.32;
   g.add(still(cord));

@@ -14,6 +14,16 @@ const MAX_SCALE = 2.4;
 const SETTLE = { type: 'spring' as const, stiffness: 420, damping: 26, mass: 0.7 };
 const LIFT = { type: 'spring' as const, stiffness: 520, damping: 30, mass: 0.6 };
 
+/** A held thing's own colour, away from the brick red that means favourite. */
+const HELD = '#5f7f99';
+
+/* The imperative `animate` below runs outside React, so `MotionConfig
+   reducedMotion` — which is context — never reaches it. A shake is the one
+   piece of motion here that is about the vestibular system rather than about
+   taste, so it asks directly. */
+const prefersStillness = () =>
+  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 interface Props {
   memory: Memory;
   index: number;
@@ -32,9 +42,24 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
   const select = useCork((s) => s.select);
   const open = useCork((s) => s.open);
   const toggleFavorite = useCork((s) => s.toggleFavorite);
+  const toggleLock = useCork((s) => s.toggleLock);
   const deleteMemory = useCork((s) => s.deleteMemory);
+  const toast = useCork((s) => s.toast);
   const selected = useCork((s) => s.selectedId === memory.id);
   const isOpen = useCork((s) => s.openId === memory.id);
+
+  /**
+   * Held where it is.
+   *
+   * A board you have finished arranging is mostly a board you want to stop
+   * arranging: the reason to reach for a pinned photograph is to look at it,
+   * and every one of those reaches is four pixels of pointer travel away from
+   * moving it instead. Locking splits those two intentions apart. What it
+   * blocks is position, angle and size — by drag, by handle, by arrow key —
+   * and nothing else: a locked memory still selects, still opens, still edits,
+   * still favourites. It is an anchor, not a read-only flag.
+   */
+  const locked = Boolean(memory.locked);
 
   const nodeRef = useRef<HTMLDivElement>(null);
   const scaleLayerRef = useRef<HTMLDivElement>(null);
@@ -102,7 +127,7 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
 
   /* ------------------------------------------------------------- dragging */
   const gesture = useRef({
-    mode: 'none' as 'none' | 'move' | 'resize' | 'rotate',
+    mode: 'none' as 'none' | 'move' | 'press' | 'resize' | 'rotate',
     px: 0,
     py: 0,
     ox: 0,
@@ -125,10 +150,30 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
     return { cx: box.left + box.width / 2, cy: box.top + box.height / 2 };
   };
 
+  /**
+   * The only feedback a lock needs.
+   *
+   * Nothing happening is ambiguous — a dropped gesture, a slow frame, the
+   * wrong element under the pointer. A degree and a half of give and then
+   * straight back says the paper is there, felt that, and is staying where it
+   * is, in about the time it takes to notice.
+   */
+  const resist = () => {
+    if (prefersStillness()) return;
+    const base = memory.rotation;
+    void animate(rot, [base, base - 1.4, base + 1.4, base], {
+      duration: 0.26,
+      ease: 'easeInOut',
+    });
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (!interactive || e.button === 2) return;
     const g = gesture.current;
-    g.mode = 'move';
+    /* A locked item still takes the pointer — it has to, or the press would
+       fall through to the room behind it and swing the camera. It just has
+       nowhere to go with it. */
+    g.mode = locked ? 'press' : 'move';
     g.px = e.clientX;
     g.py = e.clientY;
     const start = toBoard(e.clientX, e.clientY);
@@ -140,6 +185,7 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
     g.pointerId = e.pointerId;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.stopPropagation();
+    if (locked) return;
     setZBoost(9999);
     setDragging(true);
     animate(lift, 1.045, LIFT);
@@ -166,6 +212,15 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
   const onPointerMove = (e: React.PointerEvent) => {
     const g = gesture.current;
     if (g.mode === 'none' || e.pointerId !== g.pointerId) return;
+
+    if (g.mode === 'press') {
+      // once, on the way past the threshold — not on every frame of a shove
+      if (!g.moved && Math.hypot(e.clientX - g.px, e.clientY - g.py) > 4) {
+        g.moved = true;
+        resist();
+      }
+      return;
+    }
 
     if (g.mode === 'move') {
       // Board deltas rather than screen deltas over a zoom factor: with the
@@ -202,6 +257,16 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
       /* pointer already released */
+    }
+
+    if (mode === 'press') {
+      /* A press that went nowhere is a click and opens the memory. One that
+         tried to drag it is not — it was aimed at moving the thing, and
+         answering it with a card in the middle of the screen would be the
+         second surprise in a row. */
+      select(memory.id);
+      if (!g.moved) open(memory.id);
+      return;
     }
 
     if (mode === 'move') {
@@ -252,9 +317,22 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
         e.preventDefault();
         open(memory.id);
         return;
+      case 'l':
+      case 'L':
+        e.preventDefault();
+        toggleLock(memory.id);
+        return;
       case 'Delete':
       case 'Backspace':
         e.preventDefault();
+        /* Locking is for the accidents, and a stray delete on a selected
+           photograph is the worst of them. The toast carries the way out, so
+           this costs one keystroke rather than a trip to the card. */
+        if (locked) {
+          resist();
+          toast('That one is locked', 'Unlock', () => toggleLock(memory.id));
+          return;
+        }
         deleteMemory(memory.id);
         return;
       case 'ArrowLeft':
@@ -280,18 +358,26 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
     }
     e.preventDefault();
     select(memory.id);
+    // everything that reaches here moves it, which is the one thing it won't do
+    if (locked) {
+      resist();
+      return;
+    }
     updateMemory(memory.id, patch);
   };
 
+  /* The lift under the pointer is the board's way of saying "you can pick
+     this up". A locked one cannot be, so it stays down and says so with the
+     badge instead. */
   const hoverIn = useCallback(() => {
     setHovered(true);
-    if (!dragging) animate(lift, 1.012, LIFT);
-  }, [dragging, lift]);
+    if (!dragging && !locked) animate(lift, 1.012, LIFT);
+  }, [dragging, locked, lift]);
 
   const hoverOut = useCallback(() => {
     setHovered(false);
-    if (!dragging) animate(lift, 1, LIFT);
-  }, [dragging, lift]);
+    if (!dragging && !locked) animate(lift, 1, LIFT);
+  }, [dragging, locked, lift]);
 
   /* ------------------------------------------------------------ entrance */
   const fresh = Date.now() - memory.createdAt < 1400;
@@ -301,9 +387,10 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
   // uploads are already staggered as they are created, so they land immediately
   const entranceDelay = fresh ? 0 : Math.min(index * 0.022, 0.5);
 
+  // a locked item doesn't rise off the cork under the pointer, shadow included
   const shadowClass = dragging
     ? 'item-shadow-drag'
-    : hovered || selected
+    : (hovered && !locked) || selected
       ? 'item-shadow-hover'
       : 'item-shadow';
 
@@ -364,7 +451,9 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
             onPointerEnter={hoverIn}
             onPointerLeave={hoverOut}
             onKeyDown={onKeyDown}
-            className={`relative origin-center ${shadowClass} ${dragging ? 'grabbing' : 'cursor-grab'}`}
+            className={`relative origin-center ${shadowClass} ${
+              dragging ? 'grabbing' : locked ? 'cursor-pointer' : 'cursor-grab'
+            }`}
             style={{
               scale: combinedScale,
               touchAction: 'none',
@@ -425,36 +514,73 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
                 className="absolute"
                 style={{
                   inset: -7,
-                  border: '1px dashed rgba(255,250,240,0.85)',
+                  /* Marching ants around something about to move; an unbroken
+                     line around something held. Two states nobody has to be
+                     told apart. */
+                  border: locked
+                    ? '1px solid rgba(214,231,243,0.92)'
+                    : '1px dashed rgba(255,250,240,0.85)',
                   boxShadow: '0 0 0 1px rgba(60,36,14,0.28)',
                   borderRadius: 3,
                 }}
               />
-              <Handle
-                label="Resize"
-                position={{ left: boxW, top: boxH }}
-                onPointerDown={(e) => startHandle(e, 'resize')}
-                onPointerMove={onPointerMove}
-                onPointerUp={endGesture}
+              {!locked && (
+                <>
+                  <Handle
+                    label="Resize"
+                    position={{ left: boxW, top: boxH }}
+                    onPointerDown={(e) => startHandle(e, 'resize')}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={endGesture}
+                  >
+                    <path d="M4 11 L11 4 M7.5 12 L12 7.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  </Handle>
+                  <Handle
+                    label="Rotate"
+                    position={{ left: boxW, top: 0 }}
+                    onPointerDown={(e) => startHandle(e, 'rotate')}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={endGesture}
+                  >
+                    <path
+                      d="M11.4 6.2 A4.6 4.6 0 1 1 8 4.2"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      fill="none"
+                      strokeLinecap="round"
+                    />
+                    <path d="M8 1.6 L8 5 L11 4.4" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  </Handle>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Where the rotate handle would have been, which is the point: the
+              corner you reach for to move it is the corner that tells you it
+              won't. Only under the pointer or when selected — a board of
+              locked photographs should look like a board, not like a lock
+              collection. */}
+          {locked && interactive && (hovered || selected) && (
+            <div
+              className="pointer-events-none absolute"
+              style={{ left: boxX + boxW, top: boxY, zIndex: 6 }}
+            >
+              <span
+                className="grid h-[24px] w-[24px] place-items-center rounded-full"
+                style={{
+                  transform: `translate(-50%,-50%) rotate(${-liveRot}deg) scale(var(--inv-zoom, 1))`,
+                  background: 'linear-gradient(170deg,#fffdf7,#f1eadb)',
+                  border: '1px solid rgba(95,127,153,0.42)',
+                  color: HELD,
+                  boxShadow: '0 2px 5px rgba(60,36,14,0.32)',
+                }}
+                aria-hidden="true"
               >
-                <path d="M4 11 L11 4 M7.5 12 L12 7.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              </Handle>
-              <Handle
-                label="Rotate"
-                position={{ left: boxW, top: 0 }}
-                onPointerDown={(e) => startHandle(e, 'rotate')}
-                onPointerMove={onPointerMove}
-                onPointerUp={endGesture}
-              >
-                <path
-                  d="M11.4 6.2 A4.6 4.6 0 1 1 8 4.2"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  fill="none"
-                  strokeLinecap="round"
-                />
-                <path d="M8 1.6 L8 5 L11 4.4" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              </Handle>
+                <svg width="12.5" height="12.5" viewBox="0 0 16 16" fill="none">
+                  <Padlock />
+                </svg>
+              </span>
             </div>
           )}
         </motion.div>
@@ -481,6 +607,14 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
                   fill={memory.favorite ? 'currentColor' : 'none'}
                   strokeLinejoin="round"
                 />
+              </QuickAction>
+              <QuickAction
+                label={locked ? 'Unlock' : 'Lock in place'}
+                active={locked}
+                activeColor={HELD}
+                onClick={() => toggleLock(memory.id)}
+              >
+                <Padlock open={!locked} />
               </QuickAction>
               <QuickAction label="Remove" danger onClick={() => deleteMemory(memory.id)}>
                 <path d="M3.4 4.6h9.2M6.4 4.6V3.2h3.2v1.4M5 4.6l.6 8h4.8l.6-8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
@@ -528,17 +662,51 @@ function Handle({
   );
 }
 
+/**
+ * The shackle swings; the body doesn't.
+ *
+ * One shape changing state rather than two icons swapping places — which is
+ * what makes the toggle legible at sixteen pixels, and why the badge on the
+ * board and the button under it can be the same drawing.
+ */
+function Padlock({ open = false }: { open?: boolean }) {
+  return (
+    <>
+      <path
+        d={open ? 'M5.3 7.1V5.3a2.75 2.75 0 0 1 5.4-.75' : 'M5.3 7.1V5.3a2.7 2.7 0 0 1 5.4 0v1.8'}
+        stroke="currentColor"
+        strokeWidth="1.45"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <rect
+        x="3.5"
+        y="7.1"
+        width="9"
+        height="5.8"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth="1.45"
+        fill="none"
+      />
+    </>
+  );
+}
+
 function QuickAction({
   label,
   children,
   onClick,
   active,
+  activeColor = '#bd4f3c',
   danger,
 }: {
   label: string;
   children: React.ReactNode;
   onClick: () => void;
   active?: boolean;
+  /** Favourite is brick; held is not. */
+  activeColor?: string;
   danger?: boolean;
 }) {
   return (
@@ -550,13 +718,15 @@ function QuickAction({
       }}
       aria-label={label}
       title={label}
+      aria-pressed={active}
       className={`grid h-[30px] w-[30px] place-items-center rounded-full transition-colors ${
         active
-          ? 'text-[#bd4f3c]'
+          ? ''
           : danger
             ? 'text-[#8a7466] hover:bg-[rgba(189,79,60,0.12)] hover:text-[#a83f2c]'
             : 'text-[#6b5a45] hover:bg-[rgba(120,92,62,0.12)] hover:text-[#2f2419]'
       }`}
+      style={active ? { color: activeColor } : undefined}
     >
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
         {children}
