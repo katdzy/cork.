@@ -63,6 +63,11 @@ export function useRoomScene(
 ) {
   const [zoomLabel, setZoomLabel] = useState(1);
   const [grabbing, setGrabbing] = useState(false);
+  /* Where over the room to hang the laptop's own controls, and whether to hang
+     them at all. Screen pixels inside the container, worked out once when they
+     open — everything that would move the camera under them closes them, so
+     there is never a stale one to keep up with. */
+  const [finishAt, setFinishAt] = useState<{ x: number; y: number } | null>(null);
   /* Half of what a tier decides — multisampling, the shadow filter, the size
      every texture was baked at — is fixed for the life of a WebGL context or
      of a texture upload. So the tier is a dependency of this effect: changing
@@ -538,6 +543,77 @@ export function useRoomScene(
       return id ? (props.placed.find((p) => p.def.id === id) ?? null) : null;
     };
 
+    /*
+     * Rest on the laptop and its colours come up over it.
+     *
+     * Dwell rather than plain hover, and it has to be dwell: the same pointer
+     * that hovers the laptop is the one that swings the room and picks things
+     * up off the counter, so anything that appeared the instant you crossed it
+     * would spend the day appearing while somebody was on their way somewhere
+     * else. Stopping on a thing is the one hover that means you meant it.
+     *
+     * Slow to arrive and quick to leave, which is the only tolerable way round
+     * for something that shows up under the pointer uninvited: it waits out the
+     * dwell to open, and closes on the first move that lands anywhere else.
+     */
+    const DWELL = 600;
+    let dwell = 0;
+    let restX = -999;
+    let restY = -999;
+    let showing = false;
+
+    const closeFinish = () => {
+      window.clearTimeout(dwell);
+      dwell = 0;
+      if (!showing) return;
+      showing = false;
+      setFinishAt(null);
+    };
+
+    /** Over the highest point of a prop, in pixels down and across the room. */
+    const above = (prop: PlacedProp) => {
+      const box = new THREE.Box3().setFromObject(prop.group);
+      const v = new THREE.Vector3(
+        (box.min.x + box.max.x) / 2,
+        box.max.y,
+        (box.min.z + box.max.z) / 2,
+      ).project(camera);
+      return {
+        x: (v.x * 0.5 + 0.5) * container.clientWidth,
+        y: (-v.y * 0.5 + 0.5) * container.clientHeight,
+      };
+    };
+
+    const hover = (e: React.PointerEvent) => {
+      /* A finger has no hover, and square on to the board nothing in the room
+         is pickable — in neither case is resting on something a question. */
+      if (cork || e.pointerType === 'touch') return;
+      /* The panel is over the room but not of it: moving onto it is not moving
+         off the laptop, and it cancels whatever close was pending. */
+      if ((e.target as HTMLElement).closest('[data-finish]')) {
+        window.clearTimeout(dwell);
+        return;
+      }
+      if (Math.hypot(e.clientX - restX, e.clientY - restY) < 3) return;
+      restX = e.clientX;
+      restY = e.clientY;
+      window.clearTimeout(dwell);
+
+      if (showing) {
+        // a moment's grace, so the pointer can cross the gap to the panel
+        if (propAt(e.clientX, e.clientY)?.def.id !== 'laptop') {
+          dwell = window.setTimeout(closeFinish, 240);
+        }
+        return;
+      }
+      dwell = window.setTimeout(() => {
+        const prop = propAt(restX, restY);
+        if (prop?.def.id !== 'laptop') return;
+        showing = true;
+        setFinishAt(above(prop));
+      }, DWELL);
+    };
+
     /** Where on the wall a screen point lands — what the cork view zooms about. */
     const boardPointAt = (clientX: number, clientY: number) => {
       setPointer(clientX, clientY);
@@ -547,6 +623,8 @@ export function useRoomScene(
     const down = (e: React.PointerEvent) => {
       const el = e.target as HTMLElement;
       if (el.closest('[data-board-chrome]') || el.closest('[data-memory-id]')) return;
+      // anything that starts here is about to move the room out from under them
+      closeFinish();
 
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) {
@@ -595,7 +673,10 @@ export function useRoomScene(
         pinchDist = d;
         return;
       }
-      if (mode === 'none') return;
+      if (mode === 'none') {
+        hover(e);
+        return;
+      }
 
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
@@ -673,6 +754,7 @@ export function useRoomScene(
     };
 
     const wheel = (e: WheelEvent) => {
+      closeFinish();
       e.preventDefault();
       touched = true;
       const factor = Math.exp(-e.deltaY * 0.0016);
@@ -750,6 +832,7 @@ export function useRoomScene(
       cancelAnimationFrame(raf);
       ro.disconnect();
       container.removeEventListener('wheel', wheel);
+      window.clearTimeout(dwell);
       handlers.current = null;
       api.current = null;
       swapScene.current = null;
@@ -817,6 +900,7 @@ export function useRoomScene(
   return {
     zoomLabel,
     grabbing,
+    finishAt,
     onPointerDown,
     onPointerMove,
     onPointerUp,

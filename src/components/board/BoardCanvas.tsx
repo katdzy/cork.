@@ -12,6 +12,7 @@ import { SCENES, SCENE_ORDER } from '../../scene/themes';
 import { BoardItem } from './BoardItem';
 import { EmptyBoard } from './EmptyBoard';
 import { ZoomControls } from './ZoomControls';
+import { FinishPicker } from './FinishPicker';
 
 export interface CanvasApi {
   focusOn(memory: Memory, zoom?: number): void;
@@ -228,6 +229,10 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(
         onFit={() => scene.fitAll()}
         onReset={() => scene.resetView()}
       />
+
+      <AnimatePresence>
+        {scene.finishAt && <FinishPicker at={scene.finishAt} />}
+      </AnimatePresence>
 
       <AnimatePresence>
         {isDropping && (

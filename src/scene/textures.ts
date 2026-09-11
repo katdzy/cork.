@@ -40,6 +40,32 @@ function canvas(base: number, draw: (ctx: CanvasRenderingContext2D, s: number) =
   return c;
 }
 
+/**
+ * The same, for a surface that is not square.
+ *
+ * A keyboard is two and a half times wider than it is deep and a screen is
+ * eight to five. Drawing either into a square canvas and letting the UVs
+ * stretch it back out would put the distortion into the keys and the letters,
+ * which are the only things on either surface anybody would look at. The short
+ * edge follows the long one down through the tiers, so the aspect is the one
+ * thing about these that never changes.
+ */
+function sheet(
+  w: number,
+  h: number,
+  draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void,
+  limit = 1,
+) {
+  const cw = texSize(w, limit);
+  const c = document.createElement('canvas');
+  c.width = cw;
+  c.height = Math.round(h * (cw / w));
+  const ctx = c.getContext('2d')!;
+  if (cw !== w) ctx.scale(cw / w, cw / w);
+  draw(ctx, w, h);
+  return c;
+}
+
 function tex(c: HTMLCanvasElement, repeat: number | [number, number], srgb: boolean) {
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -62,17 +88,17 @@ function tex(c: HTMLCanvasElement, repeat: number | [number, number], srgb: bool
  * is catching is a capture of the room rather than a grey studio.
  */
 function levels(height: HTMLCanvasElement, lo: number, hi: number) {
-  const s = height.width;
   const out = document.createElement('canvas');
-  out.width = out.height = s;
+  out.width = height.width;
+  out.height = height.height;
   const ctx = out.getContext('2d')!;
   ctx.drawImage(height, 0, 0);
   ctx.globalCompositeOperation = 'multiply';
   ctx.fillStyle = `rgb(${Math.round((hi - lo) * 255)},${Math.round((hi - lo) * 255)},${Math.round((hi - lo) * 255)})`;
-  ctx.fillRect(0, 0, s, s);
+  ctx.fillRect(0, 0, out.width, out.height);
   ctx.globalCompositeOperation = 'lighter';
   ctx.fillStyle = `rgb(${Math.round(lo * 255)},${Math.round(lo * 255)},${Math.round(lo * 255)})`;
-  ctx.fillRect(0, 0, s, s);
+  ctx.fillRect(0, 0, out.width, out.height);
   return out;
 }
 
@@ -97,20 +123,22 @@ function rng(seed: number) {
  * bumps as greyscale — grain, weave, plaster tooth — and the slopes follow.
  */
 function heightToNormal(src: HTMLCanvasElement, strength: number) {
-  const s = src.width;
-  const from = src.getContext('2d')!.getImageData(0, 0, s, s).data;
+  const w = src.width;
+  const h = src.height;
+  const from = src.getContext('2d')!.getImageData(0, 0, w, h).data;
   const out = document.createElement('canvas');
-  out.width = out.height = s;
+  out.width = w;
+  out.height = h;
   const ctx = out.getContext('2d')!;
-  const img = ctx.createImageData(s, s);
-  const at = (x: number, y: number) => from[(((y + s) % s) * s + ((x + s) % s)) * 4] / 255;
+  const img = ctx.createImageData(w, h);
+  const at = (x: number, y: number) => from[(((y + h) % h) * w + ((x + w) % w)) * 4] / 255;
 
-  for (let y = 0; y < s; y++) {
-    for (let x = 0; x < s; x++) {
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
       const dx = (at(x + 1, y) - at(x - 1, y)) * strength;
       const dy = (at(x, y + 1) - at(x, y - 1)) * strength;
       const len = Math.hypot(dx, dy, 1);
-      const i = (y * s + x) * 4;
+      const i = (y * w + x) * 4;
       img.data[i] = ((-dx / len) * 0.5 + 0.5) * 255;
       img.data[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255;
       img.data[i + 2] = (1 / len) * 0.5 * 255 + 127.5;
@@ -173,18 +201,18 @@ export interface Maps {
 
 /** Tint a height field into a colour map: dark grain, light field. */
 function tintFrom(height: HTMLCanvasElement, light: string, dark: string) {
-  const s = height.width;
   const out = document.createElement('canvas');
-  out.width = out.height = s;
+  out.width = height.width;
+  out.height = height.height;
   const ctx = out.getContext('2d')!;
   ctx.fillStyle = light;
-  ctx.fillRect(0, 0, s, s);
+  ctx.fillRect(0, 0, out.width, out.height);
   ctx.globalCompositeOperation = 'multiply';
   ctx.drawImage(height, 0, 0);
   ctx.globalCompositeOperation = 'source-atop';
   ctx.fillStyle = dark;
   ctx.globalAlpha = 0.34;
-  ctx.fillRect(0, 0, s, s);
+  ctx.fillRect(0, 0, out.width, out.height);
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
   return out;
@@ -646,6 +674,293 @@ export function brushed(): Maps {
     });
     cache.set(`${ck}:n`, tex(heightToNormal(h, 0.9), [3, 3], false));
     if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.18, 0.46), [3, 3], false));
+  }
+  return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
+}
+
+/* ---------------------------------------------------------------- machine */
+
+/** Wrapping is for surfaces that tile. These two are pictures of one thing. */
+function clamped(t: THREE.Texture) {
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+}
+
+/**
+ * The keyboard well: the keys, and the drilled strips either side of them.
+ *
+ * Seventy-odd keys as seventy-odd boxes would be a thousand vertices spent on
+ * an object the size of a postcard on screen, and the trace shares its rays
+ * out by vertex — so modelling them would not only cost the frame, it would
+ * take the light off everything else on the counter. Drawn instead, the whole
+ * well is one quad, and the keys get something geometry could not have given
+ * them at this size anyway: an edge sharp enough to survive being looked at.
+ *
+ * Laid out once and inked twice. Everywhere else in this file the colour is
+ * derived from the height, because a board's colour really is its depth; here
+ * it is not — the caps are the palest thing on the machine and the frame they
+ * sit in is the darkest. So the same layout runs through two palettes: greys
+ * for the relief, and the real colours for the map.
+ */
+interface Deck {
+  floor: string;
+  skirt: string;
+  cap: string;
+}
+
+function deckOf(p: Deck) {
+  return sheet(1024, 384, (ctx, w, d) => {
+    ctx.fillStyle = p.floor;
+    ctx.fillRect(0, 0, w, d);
+
+    const rr = (x: number, y: number, kw: number, kh: number, r: number, fill: string) => {
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.roundRect(x, y, kw, kh, r);
+      ctx.fill();
+    };
+
+    /* Two steps rather than one. A cap that goes from the floor of the well to
+       its full height in a single pixel comes out of the normal map as a wall;
+       the skirt is what makes it read as a chamfer you could run a fingernail
+       down. */
+    const cap = (x: number, y: number, kw: number, kh: number) => {
+      rr(x, y, kw, kh, 6, p.skirt);
+      rr(x + 2.5, y + 2.5, kw - 5, kh - 5, 4.5, p.cap);
+    };
+
+    /* The rows are relative widths, not pixels: a tab key is one and a half of
+       a letter key on every keyboard ever made, and the unit falls out of
+       whatever room the row has left once the gaps are taken out. The keys
+       fill the well, which is what puts a cap at sixteen millimetres across —
+       the one measurement on a keyboard that every hand already knows. */
+    const x0 = 24;
+    const span = 976;
+    const gap = 7;
+    const letters = (n: number) => Array<number>(n).fill(1);
+    const row = (y: number, kh: number, widths: number[], width = span) => {
+      const unit = (width - gap * (widths.length - 1)) / widths.reduce((a, b) => a + b, 0);
+      let x = x0;
+      for (const rel of widths) {
+        cap(x, y, unit * rel, kh);
+        x += unit * rel + gap;
+      }
+      return x;
+    };
+
+    row(12, 40, [1.6, ...letters(12), 1.6]);
+    row(58, 58, [...letters(13), 1.75]);
+    row(122, 58, [1.5, ...letters(12), 1.25]);
+    row(186, 58, [1.75, ...letters(11), 1.9]);
+    row(250, 58, [2.3, ...letters(10), 2.3]);
+    const end = row(314, 58, [1, 1, 1, 1.25, 5.4, 1.25, 1], span - 172);
+
+    // the inverted T, the one corner of a keyboard nobody has ever redrawn
+    const aw = (x0 + span - end - gap * 2) / 3;
+    cap(end, 314, aw, 58);
+    cap(end + aw + gap, 314, aw, 26);
+    cap(end + aw + gap, 346, aw, 26);
+    cap(end + (aw + gap) * 2, 314, aw, 58);
+  });
+}
+
+export function keyboard(): Maps {
+  const ck = 'keyboard';
+  if (!cache.has(ck)) {
+    const relief = deckOf({ floor: '#232323', skirt: '#8e8e8e', cap: '#e9e9e9' });
+    const colour = deckOf({ floor: '#33342e', skirt: '#b9b7ab', cap: '#eceade' });
+    cache.set(ck, clamped(tex(colour, 1, true)));
+    cache.set(`${ck}:n`, clamped(tex(heightToNormal(relief, 1.5), 1, false)));
+    // moulded plastic: matt on the caps, a shade less so down in the gaps
+    if (wantRoughness()) cache.set(`${ck}:r`, clamped(tex(levels(relief, 0.52, 0.84), 1, false)));
+  }
+  return {
+    map: cache.get(ck),
+    normalMap: cache.get(`${ck}:n`),
+    roughnessMap: cache.get(`${ck}:r`),
+  };
+}
+
+/**
+ * A display that is on, bezel and all, as one picture.
+ *
+ * The bezel is in the texture rather than in the lid because the join between
+ * the two is the thing that gives a screen away: a black rectangle laid over
+ * a metal one leaves a seam that catches the window, and nothing else in the
+ * room has a seam there. Drawn together they share an edge exactly, and the
+ * corners can be rounded the way this machine's are without any of that
+ * costing a single triangle.
+ *
+ * What is on it is the wallpaper this machine is always photographed wearing:
+ * soft vertical columns of colour, blurred into each other until the joins are
+ * gone. It is the one saturated thing in a room of oak and cream, which is
+ * exactly what a screen is when you walk into a kitchen and one is open.
+ */
+export function screen(): Maps {
+  const ck = 'screen';
+  if (!cache.has(ck)) {
+    const face = sheet(1024, 716, (ctx, w, h) => {
+      const bezel = '#26282a';
+      ctx.fillStyle = bezel;
+      ctx.fillRect(0, 0, w, h);
+
+      // thin at the sides, a little over at the top for the camera, and a chin
+      const x0 = 14;
+      const y0 = 26;
+      const sw = w - 28;
+      const sh = h - y0 - 68;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(x0, y0, sw, sh, 18);
+      ctx.clip();
+
+      ctx.fillStyle = '#f7f6e6';
+      ctx.fillRect(x0, y0, sw, sh);
+
+      /* Drawn blurred rather than blended. Seven capsules wider than the gaps
+         between them, put down through a blur that is most of a column wide,
+         come out as one continuous wash with no two edges meeting — which is
+         the whole trick of every wallpaper that has ever shipped on a laptop. */
+      const columns = [
+        { tint: '#f0e64a', top: 0.06, foot: 0.72 },
+        { tint: '#a8d648', top: 0.15, foot: 1.04 },
+        { tint: '#5ecb9a', top: 0.04, foot: 0.58 },
+        { tint: '#42c4dd', top: 0.19, foot: 1.06 },
+        { tint: '#fdfae0', top: 0.03, foot: 0.78 },
+        { tint: '#b6dc46', top: 0.11, foot: 1.05 },
+        { tint: '#f4ec58', top: 0.05, foot: 0.86 },
+      ];
+      const cw = sw / columns.length;
+      /* Enough blur to lose the edges, not so much that the capsules lose
+         their shape — the wallpaper is columns of colour, and a column that
+         has been blurred until it has no top is a wash. */
+      ctx.filter = 'blur(15px)';
+      columns.forEach((col, i) => {
+        ctx.fillStyle = col.tint;
+        ctx.beginPath();
+        ctx.roundRect(
+          x0 + i * cw + 5, y0 + col.top * sh, cw - 10, (col.foot - col.top) * sh, cw * 0.46,
+        );
+        ctx.fill();
+      });
+      // and the two that have drifted off the columns and gone round
+      for (const [fx, fy, fr, tint] of [
+        [0.37, 0.52, 0.11, '#ffffff'],
+        [0.66, 0.3, 0.08, '#7fdfe8'],
+      ] as [number, number, number, string][]) {
+        ctx.fillStyle = tint;
+        ctx.globalAlpha = 0.66;
+        ctx.beginPath();
+        ctx.ellipse(x0 + sw * fx, y0 + sh * fy, sh * fr, sh * fr * 1.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.filter = 'none';
+
+      /* The sheen. A screen is a mirror the moment it stops being brighter
+         than the room, and it is never quite brighter than a window. */
+      const glare = ctx.createLinearGradient(x0, y0, x0 + sw * 0.7, y0 + sh);
+      glare.addColorStop(0, 'rgba(255,255,255,0.16)');
+      glare.addColorStop(0.45, 'rgba(255,255,255,0.03)');
+      glare.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = glare;
+      ctx.fillRect(x0, y0, sw, sh);
+      ctx.restore();
+
+      // the notch, and the camera that is the reason for it
+      ctx.fillStyle = bezel;
+      ctx.beginPath();
+      ctx.roundRect((w - 164) / 2, 0, 164, y0 + 26, [0, 0, 9, 9]);
+      ctx.fill();
+      ctx.fillStyle = '#15171a';
+      ctx.beginPath();
+      ctx.arc(w / 2, y0 + 1, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(150,168,186,0.5)';
+      ctx.beginPath();
+      ctx.arc(w / 2 - 1.6, y0 - 1, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // and the name of the thing, etched into the chin
+      ctx.fillStyle = '#797d80';
+      ctx.font = '600 17px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.letterSpacing = '6px';
+      ctx.fillText('fujikey nero', w / 2 + 3, h - 34);
+      ctx.letterSpacing = '0px';
+    });
+
+    cache.set(ck, clamped(tex(face, 1, true)));
+  }
+  return { map: cache.get(ck) };
+}
+
+/**
+ * Anodised aluminium: blasted, then dyed.
+ *
+ * Anodising is not paint. The metal is taken down to a fine even tooth, and
+ * the colour goes into the oxide layer grown on top of it rather than onto it,
+ * which is why a yellow laptop still reads as metal and a yellow painted one
+ * reads as a toy. So the colour is not in here at all — it stays on the
+ * material, where it belongs, and what this supplies is the tooth: two scales
+ * of blast pitting for the sparkle, and a slow unevenness under them, because
+ * a dye in a grown layer is never quite the same depth twice.
+ *
+ * Everything is drawn in a wrapped pass so the grain survives being tiled, and
+ * the whole square covers about a metre of surface — which puts the pitting
+ * near a millimetre, invisible across the room and there when you lean in,
+ * exactly as it is on the real thing.
+ */
+export function anodised(): Maps {
+  const ck = 'anodised';
+  if (!cache.has(`${ck}:n`)) {
+    const rnd = rng(1959);
+    const h = canvas(512, (ctx, s) => {
+      ctx.fillStyle = '#8f8f8f';
+      ctx.fillRect(0, 0, s, s);
+
+      /* The unevenness in the dye. Drawn nine times over, once into the square
+         and once for each way out of it, so what runs off one edge arrives
+         back at the other and the tiling has no seam to find. */
+      ctx.filter = `blur(${s / 24}px)`;
+      for (let i = 0; i < 30; i++) {
+        const cx = rnd() * s;
+        const cy = rnd() * s;
+        const rx = s * (0.06 + rnd() * 0.16);
+        const ry = s * (0.06 + rnd() * 0.16);
+        const v = rnd() > 0.5 ? 255 : 0;
+        ctx.fillStyle = `rgba(${v},${v},${v},0.07)`;
+        for (const ox of [-s, 0, s]) {
+          for (const oy of [-s, 0, s]) {
+            ctx.beginPath();
+            ctx.ellipse(cx + ox, cy + oy, rx, ry, rnd() * 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+      ctx.filter = 'none';
+
+      // and the blasting: fine everywhere, with the odd deeper pit in it
+      for (let i = 0; i < 16000; i++) {
+        const v = rnd() > 0.5 ? 255 : 0;
+        ctx.fillStyle = `rgba(${v},${v},${v},${0.04 + rnd() * 0.14})`;
+        ctx.fillRect(rnd() * s, rnd() * s, 1, 1);
+      }
+      for (let i = 0; i < 900; i++) {
+        ctx.fillStyle = `rgba(0,0,0,${0.05 + rnd() * 0.1})`;
+        ctx.fillRect(rnd() * s, rnd() * s, 2, 2);
+      }
+    });
+
+    /* A thousandth, because the UVs an extrusion generates are in the units
+       the shape was drawn in. One square of this covers a metre of case, so
+       the grain is the same size on the lid, the palm rest and the underside
+       without any of them having to be told what size they are. */
+    cache.set(`${ck}:n`, tex(heightToNormal(h, 0.7), 1 / 1000, false));
+    // satin: never chalk, never a mirror, and a shade duller down in the pits
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.6, 1), 1 / 1000, false));
   }
   return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useCork } from '../../lib/store';
 import { setGraphicsPref, useGraphics, type GraphicsPref, type Tier } from '../../scene/quality';
+import { FINISHES, setFinish, useFinish } from '../../scene/finish';
 import { Wordmark } from '../chrome/Wordmark';
 
 const GRAPHICS: ReadonlyArray<[GraphicsPref, string]> = [
@@ -12,6 +13,9 @@ const GRAPHICS: ReadonlyArray<[GraphicsPref, string]> = [
 ];
 
 const TIER_WORDS: Record<Tier, string> = { low: 'Low', medium: 'Medium', high: 'High' };
+
+/** The body colour, as CSS, for the swatch that stands for it. */
+const swatch = (body: number) => `#${body.toString(16).padStart(6, '0')}`;
 
 const TIER_BLURBS: Record<Tier, string> = {
   low: 'Smaller shadow maps, quarter-size surfaces and no light shafts, for a machine that would rather not.',
@@ -27,6 +31,7 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
   const deleteBoard = useCork((s) => s.deleteBoard);
   const resetEverything = useCork((s) => s.resetEverything);
   const { pref, tier } = useGraphics();
+  const finish = useFinish();
   const board = boards.find((b) => b.id === activeBoardId);
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -100,6 +105,38 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
             ? `Delete “${board?.name}” and its ${boardCount} ${boardCount === 1 ? 'memory' : 'memories'}?`
             : 'Delete this board'}
         </button>
+
+        <div className="hairline my-5" />
+
+        <span className="eyebrow">Fujikey Nero</span>
+        <div className="mt-3 flex items-center gap-[13px]">
+          {FINISHES.map((f) => {
+            const on = f.id === finish.id;
+            return (
+              <button
+                key={f.id}
+                onClick={() => setFinish(f.id)}
+                aria-pressed={on}
+                aria-label={f.label}
+                title={f.label}
+                className="h-[28px] w-[28px] rounded-full transition-transform duration-150 hover:scale-[1.12]"
+                style={{
+                  background: swatch(f.body),
+                  /* A lit rim rather than a border, so a swatch reads as the
+                     anodised metal it stands for and not as a paint chip. */
+                  boxShadow: on
+                    ? '0 0 0 2px rgba(255,253,247,0.95), 0 0 0 3.5px #8a6a48, inset 0 1.5px 2.5px rgba(255,255,255,0.5), inset 0 -1.5px 3px rgba(28,20,10,0.22)'
+                    : '0 0 0 1px rgba(70,52,32,0.18), inset 0 1.5px 2.5px rgba(255,255,255,0.5), inset 0 -1.5px 3px rgba(28,20,10,0.22)',
+                }}
+              />
+            );
+          })}
+        </div>
+        <p className="mt-3 text-[13px] leading-[1.5] text-[#5d4f42]">
+          <span className="font-bold text-[#3f362a]">{finish.label}.</span> Anodised rather than
+          painted, so the colour sits in the metal and the window still comes off it. The keys, the
+          bezel and the wallpaper stay as they are.
+        </p>
 
         <div className="hairline my-5" />
 
