@@ -43,6 +43,7 @@ export function MobileBar({
   return (
     <>
       <div
+        data-tour="boards"
         className="panel pointer-events-auto absolute left-3 right-3 z-30 flex h-[50px] items-center gap-2 rounded-[16px] px-3"
         style={{ top: 'max(10px, env(safe-area-inset-top, 0px))' }}
       >

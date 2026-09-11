@@ -637,7 +637,14 @@ export function useRoomScene(
       moved = false;
       lastX = e.clientX;
       lastY = e.clientY;
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        /* A pointer the browser has already finished with. Capture is a
+           convenience here — without it a drag still tracks, it just stops at
+           the edge of the element — and letting this throw would abandon the
+           rest of the gesture set-up half done. */
+      }
 
       /* In the cork view the room's furniture is not pickable, and a drag is
          a slide rather than a swing. Both for the same reason: a gesture aimed
@@ -704,6 +711,29 @@ export function useRoomScene(
         needsRender = true;
       }
     };
+
+    /*
+     * The release nobody saw.
+     *
+     * A finger that goes down on the room and comes up somewhere that is not
+     * the room — over a sheet that opened under it, a tour that covered it,
+     * anything mounted outside this container — never reaches the handler
+     * below, and its id stays in the map. The next single touch then makes the
+     * map two long, which is the signature of a pinch, and from then on every
+     * one-finger drag is read as a gesture with a missing second finger: the
+     * room simply stops answering. So the window gets the last word on which
+     * pointers are still down, whatever they happened to come up over.
+     */
+    const release = (e: PointerEvent) => {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.delete(e.pointerId);
+      if (pointers.size || mode === 'none') return;
+      mode = 'none';
+      dragged = null;
+      setGrabbing(false);
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
 
     const up = (e: React.PointerEvent) => {
       pointers.delete(e.pointerId);
@@ -832,6 +862,8 @@ export function useRoomScene(
       cancelAnimationFrame(raf);
       ro.disconnect();
       container.removeEventListener('wheel', wheel);
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
       window.clearTimeout(dwell);
       handlers.current = null;
       api.current = null;

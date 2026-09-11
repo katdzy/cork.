@@ -80,6 +80,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings(): void }) {
 
   return (
     <nav
+      data-tour="boards"
       className="panel pointer-events-auto absolute left-4 top-4 z-30 flex w-[224px] flex-col rounded-[18px] px-3 pb-3 pt-4"
       aria-label="Boards and views"
     >
