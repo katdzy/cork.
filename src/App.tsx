@@ -16,6 +16,8 @@ import { SettingsSheet } from './components/modals/SettingsSheet';
 import { Toasts } from './components/ui/Toasts';
 import { Wordmark } from './components/chrome/Wordmark';
 import { Pin } from './components/board/Pin';
+import { Tour } from './components/chrome/Tour';
+import { useTour } from './lib/tour';
 
 const VIEW_TITLES: Record<string, string> = {
   all: 'All memories',
@@ -38,6 +40,7 @@ export default function App() {
   const setQuery = useCork((s) => s.setQuery);
   const setActiveBoard = useCork((s) => s.setActiveBoard);
 
+  const showTour = useTour();
   const canvasRef = useRef<CanvasApi>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -175,6 +178,11 @@ export default function App() {
       <AnimatePresence>
         {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} />}
       </AnimatePresence>
+
+      {/* Last, so it sits over everything. Not while Settings is open: that is
+          where somebody goes to ask for it a second time, and a tour that
+          covers the button you summoned it with is a poor start. */}
+      <AnimatePresence>{showTour && !settingsOpen && <Tour />}</AnimatePresence>
 
       {/* a quiet hint — never over an empty board, which says its own piece */}
       {isDesktop && boardHasMemories && (

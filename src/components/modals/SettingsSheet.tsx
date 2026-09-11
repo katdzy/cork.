@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { useCork } from '../../lib/store';
 import { setGraphicsPref, useGraphics, type GraphicsPref, type Tier } from '../../scene/quality';
 import { FINISHES, setFinish, useFinish } from '../../scene/finish';
+import { startTour } from '../../lib/tour';
 import { Wordmark } from '../chrome/Wordmark';
 
 const GRAPHICS: ReadonlyArray<[GraphicsPref, string]> = [
@@ -194,6 +195,17 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
           }}
         >
           {confirmReset ? 'Erase everything and restore the demo board?' : 'Start over'}
+        </button>
+
+        <button
+          onClick={() => {
+            startTour();
+            onClose();
+          }}
+          className="mt-3 w-full rounded-[11px] py-[10px] text-[13px] font-bold text-[#6b5a45] transition-colors"
+          style={{ background: 'rgba(120,92,62,0.1)' }}
+        >
+          Show me round again
         </button>
 
         <div className="mt-6 flex items-center justify-between">

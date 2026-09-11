@@ -50,7 +50,7 @@ export function AddMenu({ onPickFiles, centerPoint, compact = false }: Props) {
   };
 
   return (
-    <div ref={rootRef} className="pointer-events-auto relative">
+    <div ref={rootRef} data-tour="add" className="pointer-events-auto relative">
       <input
         ref={fileRef}
         type="file"

@@ -88,6 +88,7 @@ export function ZoomControls({
           making one. Hence `aria-pressed` and a filled state, rather than an
           icon that quietly swaps to the other thing. */}
       <button
+        data-tour="cork"
         className={cork ? `${btn} hover:bg-transparent` : btn}
         style={cork ? { background: '#3f362a', color: '#fdf6e8' } : undefined}
         onClick={onToggleCork}
