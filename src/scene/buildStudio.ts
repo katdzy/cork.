@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { COUNTER, ROOM } from './layout';
 import { bloom, box, cylinder, foliage, lightCone, pierced, still } from './parts';
-import { concrete, fabric, oak, weave } from './textures';
+import { concrete, cork, fabric, oak, weave } from './textures';
 
 /**
  * The studio: a concrete workspace some way up an office building.
@@ -366,8 +366,13 @@ export function buildStudio(): THREE.Group {
   ]) {
     g.add(still(box(w, h, 96, ink, cx + ox, cy + oy, STUDIO_BOARD.z + 24)));
   }
-  g.add(still(box(3600, 2400, 44, new THREE.MeshStandardMaterial({ color: 0x8a5f31, roughness: 0.95 }),
-    cx, cy, STUDIO_BOARD.z - 12)));
+  g.add(still(box(3600, 2400, 44, new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.94,
+    metalness: 0,
+    ...cork(),
+    normalScale: new THREE.Vector2(0.85, 0.85),
+  }), cx, cy, STUDIO_BOARD.z - 28)));
 
   /* -- pendants --------------------------------------------------------- */
   const lights: THREE.SpotLight[] = [];

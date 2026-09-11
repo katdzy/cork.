@@ -15,8 +15,13 @@ const STRAY_PINS = [
 ];
 
 /**
- * An empty board is still a board: warm light, a few stray pins and blank
- * scraps waiting to be used — never an empty-state card.
+ * An empty board is still a board: a few stray pins and blank scraps waiting to
+ * be used — never an empty-state card.
+ *
+ * It used to paint its own pool of light onto the cork, blurred, across fifteen
+ * hundred pixels. The cork is a lit surface in the room now, so the light is
+ * really there and this was both redundant and the most expensive thing on an
+ * otherwise empty board.
  */
 export function EmptyBoard({ onAdd }: { onAdd(): void }) {
   return (
@@ -24,18 +29,6 @@ export function EmptyBoard({ onAdd }: { onAdd(): void }) {
       className="pointer-events-none absolute"
       style={{ left: BOARD_W / 2, top: BOARD_H / 2, width: 0, height: 0 }}
     >
-      {/* sunlight falling on the cork */}
-      <div
-        className="absolute -translate-x-1/2 -translate-y-1/2"
-        style={{
-          width: 1500,
-          height: 1000,
-          background:
-            'radial-gradient(46% 42% at 44% 40%, rgba(255,241,209,0.5), rgba(255,241,209,0) 70%)',
-          filter: 'blur(6px)',
-        }}
-      />
-
       {SCRAPS.map((s, i) => (
         <motion.div
           key={i}

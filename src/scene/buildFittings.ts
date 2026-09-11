@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BOARD, HOOKS, RACK } from './layout';
 import { box, foliage, still } from './parts';
-import { oak, paper, weave } from './textures';
+import { cork, oak, paper, weave } from './textures';
 
 /**
  * What else is on the wall: the mail rack, the hook rail with the keys on it,
@@ -83,12 +83,15 @@ export function buildFittings(): THREE.Group {
   ]) {
     g.add(still(box(w, h, 88, darkOak, cx + ox, cy + oy, BOARD.z + 20)));
   }
-  // The cork the DOM sheet sits exactly on top of. It is only ever seen if the
-  // board layer is still catching up, but that is one frame of cork instead of
-  // one frame of a hole in the wall.
-  const backing = box(BOARD.width, BOARD.height, 44, new THREE.MeshStandardMaterial({ color: 0x9d6d3a, roughness: 0.94 }),
-    cx, cy, BOARD.z - 12);
-  g.add(still(backing));
+  // The cork itself, in the room rather than in the DOM. Its front face sits
+  // just behind the plane the memories are placed on, inside the moulding.
+  g.add(still(box(BOARD.width, BOARD.height, 44, new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.94,
+    metalness: 0,
+    ...cork(),
+    normalScale: new THREE.Vector2(0.85, 0.85),
+  }), cx, cy, BOARD.z - 28)));
 
   /* -- the mail rack ---------------------------------------------------- */
   const rx = RACK.left + RACK.width / 2;

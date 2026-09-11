@@ -306,6 +306,133 @@ export function fabric(): Maps {
   return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
 }
 
+/* ------------------------------------------------------------------- cork */
+
+/**
+ * Cork, as a surface in the room rather than a picture of one.
+ *
+ * This used to be nine stacked CSS background layers — four of them tiled SVG
+ * — on a 3600x2400 element sitting in the DOM over the scene. Every time the
+ * camera changed the angle that element was projected at, the browser had to
+ * re-composite all nine across a layer far larger than the screen. Desktop
+ * absorbed it; phones, which rasterise big layers in tiles and evict those
+ * tiles under memory pressure, showed it as the texture flickering.
+ *
+ * Here it is one tiling texture on the panel that was already in the scene.
+ * The GPU samples it with mipmaps and anisotropy, so it is sharper than the
+ * CSS version at distance, and it now takes the room's own light — which is
+ * what the painted gradients on the old one were imitating.
+ */
+export function cork(): Maps {
+  const ck = 'cork';
+  if (!cache.has(ck)) {
+    const size = 1024;
+    const rnd = rng(20260907);
+
+    // Real cork is a mat of compressed granules: irregular light and dark
+    // flecks with darker seams between them. Mid tones dominate; bright flecks
+    // are rare, which is what stops it reading as leopard print.
+    const grains: Array<[string, number, number]> = [
+      ['#c1904f', 0.46, 0.62],
+      ['#b5854f', 0.46, 0.58],
+      ['#a2703a', 0.5, 0.46],
+      ['#cb9d5f', 0.34, 0.72],
+      ['#8d5c31', 0.5, 0.38],
+      ['#96683a', 0.5, 0.46],
+      ['#d8ab6d', 0.24, 0.8],
+      ['#6f4826', 0.42, 0.28],
+      ['#e8cb98', 0.14, 0.9],
+    ];
+
+    type Blob = { x: number; y: number; rx: number; ry: number; rot: number; i: number; a: number };
+    const granules: Blob[] = [];
+    const seams: Array<[number, number, number, number]> = [];
+    const holes: Array<[number, number, number]> = [];
+
+    /*
+     * Two scales of granule, so the repeat never resolves into a pattern.
+     *
+     * The multiplier is what sets their real-world size, and it matters: a tile
+     * is a metre of board, so at 1.9 the flecks came out a centimetre across
+     * and the sheet read as cereal rather than as cork. Real granules are two
+     * to five millimetres.
+     */
+    for (const [count, scale] of [[3000, 0.62], [1700, 1.25]] as const) {
+      for (let i = 0; i < count; i++) {
+        granules.push({
+          x: rnd() * size,
+          y: rnd() * size,
+          rx: (3.4 + rnd() * 9) * scale * 0.88,
+          ry: (2.2 + rnd() * 4.6) * scale * 0.88,
+          rot: rnd() * Math.PI,
+          i: Math.floor(rnd() * grains.length),
+          a: rnd(),
+        });
+      }
+    }
+    // the dark seams and pits between the granules, which are most of what
+    // keeps it from going flat and pale
+    for (let i = 0; i < 2600; i++) {
+      seams.push([rnd() * size, rnd() * size, (0.5 + rnd() * 1.5) * 1.15, 0.2 + rnd() * 0.34]);
+    }
+    // old pin holes, left behind by everything that used to hang here
+    for (let i = 0; i < 5; i++) holes.push([rnd() * size, rnd() * size, 3 + rnd() * 3]);
+
+    /** Drawn nine times at tile offsets so shapes survive the wrap. */
+    const paint = (ctx: CanvasRenderingContext2D, height: boolean) => {
+      ctx.fillStyle = height ? '#808080' : '#9a6a33';
+      ctx.fillRect(0, 0, size, size);
+      for (const ox of [-size, 0, size]) {
+        for (const oy of [-size, 0, size]) {
+          for (const g of granules) {
+            const [fill, op, lum] = grains[g.i];
+            ctx.fillStyle = height
+              ? `rgba(${Math.round(lum * 255)},${Math.round(lum * 255)},${Math.round(lum * 255)},${op})`
+              : fill;
+            ctx.globalAlpha = height ? 1 : op;
+            ctx.beginPath();
+            ctx.ellipse(g.x + ox, g.y + oy, g.rx, g.ry, g.rot, 0, 7);
+            ctx.fill();
+          }
+          ctx.globalAlpha = 1;
+          for (const [x, y, r, op] of seams) {
+            ctx.fillStyle = height ? `rgba(20,20,20,${op})` : `rgba(79,49,21,${op})`;
+            ctx.beginPath();
+            ctx.arc(x + ox, y + oy, r, 0, 7);
+            ctx.fill();
+          }
+          for (const [x, y, r] of holes) {
+            ctx.fillStyle = height ? 'rgba(10,10,10,0.7)' : 'rgba(81,51,20,0.55)';
+            ctx.beginPath();
+            ctx.ellipse(x + ox, y + oy, r, r * 0.85, 0, 0, 7);
+            ctx.fill();
+            // the lip of compressed cork the pin pushed up below the hole
+            ctx.fillStyle = height ? 'rgba(235,235,235,0.5)' : 'rgba(236,203,158,0.34)';
+            ctx.beginPath();
+            ctx.ellipse(x + ox, y + oy + r * 0.75, r * 0.9, r * 0.5, 0, 0, 7);
+            ctx.fill();
+          }
+        }
+      }
+    };
+
+    const colour = canvas(size, (ctx) => paint(ctx, false));
+    const height = canvas(size, (ctx) => paint(ctx, true));
+
+    // roughly a metre of cork per tile, which is about the granule scale a
+    // sheet this size actually has
+    const rep: [number, number] = [3.6, 2.4];
+    cache.set(ck, tex(colour, rep, true));
+    cache.set(`${ck}:n`, tex(heightToNormal(height, 2.6), rep, false));
+    cache.set(`${ck}:r`, tex(height, rep, false));
+  }
+  return {
+    map: cache.get(ck),
+    normalMap: cache.get(`${ck}:n`),
+    roughnessMap: cache.get(`${ck}:r`),
+  };
+}
+
 /* ------------------------------------------------------------------ weave */
 
 /** Coiled seagrass, for the baskets and the tray. */

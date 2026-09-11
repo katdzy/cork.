@@ -7,7 +7,6 @@ import { searchMatches } from '../../lib/utils';
 import { addFilesToBoard } from '../../lib/createMemories';
 import { useRoomScene } from '../../scene/useRoomScene';
 import { SCENES, SCENE_ORDER } from '../../scene/themes';
-import { CorkSurface } from './CorkSurface';
 import { BoardItem } from './BoardItem';
 import { EmptyBoard } from './EmptyBoard';
 import { ZoomControls } from './ZoomControls';
@@ -152,9 +151,10 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(
          * actually see and nothing else.
          */
         style={{ width: BOARD_W, height: BOARD_H, position: 'absolute', visibility: 'hidden' }}
+        /* Transparent. The cork behind it is a lit surface in the scene now, so
+           there is nothing board-sized left for the browser to paint here —
+           only the memories themselves, wherever they happen to be pinned. */
       >
-        <CorkSurface scene={sceneId} />
-
         {isEmpty && <EmptyBoard onAdd={onRequestAdd} />}
 
         {boardMemories.map((memory, i) => (
