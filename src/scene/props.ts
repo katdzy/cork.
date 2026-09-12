@@ -4,8 +4,8 @@ import { COUNTER } from './layout';
 import { foliage } from './parts';
 import { bakeLight, mergeStatic } from './bake';
 import { quality } from './quality';
-import { anodised, keyboard, oak, screen, weave } from './textures';
-import { finish, onPaint, type Finish } from './finish';
+import { anodised, keyboard, oak, screen, softTouch, thinkDeck, thinkScreen, tinkerMark, weave } from './textures';
+import { finish, model, onPaint, onSwap, type Finish } from './models';
 
 /**
  * The things on the counter, which are the things you can pick up and move.
@@ -180,7 +180,7 @@ let coat: ((f: Finish) => void) | null = null;
  * it, so what darkens the keys is the shadow of the case they sit in rather
  * than a gradient painted on to suggest one.
  */
-function laptop() {
+function nero() {
   const g = new THREE.Group();
   const W = 960;
   const D = 676;
@@ -287,6 +287,124 @@ function laptop() {
   lid.rotation.x = -0.26;
   g.add(lid);
   return g;
+}
+
+/**
+ * The Levona Tinkerbel: the other kind of laptop entirely.
+ *
+ * Deeper, squarer and thicker than the Nero, with a twelve-unit radius where
+ * the other has twenty-six — which is four millimetres against eight, and is
+ * most of why one reads as milled and the other as moulded. It is a box that
+ * has been getting on with it since before anybody thought a laptop should be
+ * thin, and every proportion here is arguing that.
+ *
+ * The three things that actually name it are all small: a red nub in the
+ * middle of the keys, three buttons underneath them, and a chin deep enough to
+ * write on. The first two come in on the deck texture, the third is simply
+ * bezel — and none of them cost a triangle, which is the only reason a second
+ * machine is affordable at all.
+ */
+function tinkerbel() {
+  const g = new THREE.Group();
+  const W = 960;
+  const D = 700;
+  const LID = 700;
+  const RAIL = 10;
+  const top = 40 + RAIL;
+  /** Four millimetres. A business laptop is a box and is meant to look it. */
+  const R = 12;
+
+  /* Soft-touch, not metal: the colour is nearly all of what you see, because
+     there is almost no reflection left to tint. Which is also why the same six
+     colours would look wrong here — this finish wants ink, not anodising. */
+  const shell = new THREE.MeshStandardMaterial({
+    roughness: 0.82, metalness: 0.06, envMapIntensity: 0.5, ...softTouch(),
+  });
+  const inner = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.78 });
+
+  coat = (f) => {
+    shell.color.setHex(f.body);
+  };
+  coat(finish());
+  onPaint(coat);
+
+  part(g, slab(W - 56, D - 56, 6, R - 5, shell));
+  const base = slab(W, D, 34, R, shell);
+  base.position.y = 6;
+  part(g, base);
+
+  /* One plate with the well and the trackpad taken out of it. The well runs
+     deeper than the other machine's because it has the buttons in it. */
+  const deck = slab(W, D, RAIL, R, shell, [
+    { w: 900, d: 390, r: 10, z: -D / 2 + 50 + 195 },
+    { w: 340, d: 180, r: 10, z: 210 },
+  ]);
+  deck.position.y = 40;
+  part(g, deck);
+
+  part(g, bx(900, 4, 28, inner, 0, 42, -D / 2 + 36));
+
+  const keys = new THREE.Mesh(new THREE.PlaneGeometry(900, 390), new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.94, ...thinkDeck(),
+  }));
+  keys.rotation.x = -Math.PI / 2;
+  keys.position.set(0, 41, -D / 2 + 50 + 195);
+  part(g, keys);
+
+  // matte glass, set down in its cut-out the way the other one's is
+  const pad = slab(336, 176, 7, 9, new THREE.MeshStandardMaterial({
+    color: 0x1c1c1e, roughness: 0.42, metalness: 0.1, envMapIntensity: 0.6,
+  }));
+  pad.position.set(0, 40, 210);
+  part(g, pad);
+
+  /* The name, on a card rather than in the case. It is a cut-out, so the trace
+     leaves it alone — shading a rectangle with a word painted on it would
+     shade the corners that are not there. */
+  const mark = new THREE.Mesh(new THREE.PlaneGeometry(190, 47), new THREE.MeshStandardMaterial({
+    /* A cut-out, not a transparent card: alpha-tested it stays in the opaque
+       pass, takes the trace's vertex colours like everything else on the case,
+       and folds into the merge at the end of the bake instead of hanging off
+       the prop as its own draw call for the rest of the session. */
+    map: tinkerMark(), alphaTest: 0.4, roughness: 0.8,
+  }));
+  mark.rotation.x = -Math.PI / 2;
+  mark.position.set(-W / 2 + 150, top + 0.6, D / 2 - 44);
+  part(g, mark);
+
+  const lid = new THREE.Group();
+  const shut = new THREE.ExtrudeGeometry(rounded(W, LID, R), {
+    depth: 22, bevelEnabled: false, curveSegments: SEGMENTS,
+  });
+  shut.translate(0, 0, -11);
+  const panelMesh = new THREE.Mesh(knit(shut), shell);
+  panelMesh.position.y = LID / 2;
+  part(lid, panelMesh);
+
+  const lit = thinkScreen();
+  const face = panel(W - 10, LID - 10, R - 4, new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.2,
+    envMapIntensity: 0.35,
+    /* A brighter panel than the Nero's, because what is on it is a pale
+       desktop rather than a dark one, and a screen carrying a white window is
+       the brightest thing in any room it is open in. */
+    emissive: 0xffffff,
+    emissiveIntensity: 0.34,
+    emissiveMap: lit.map,
+    ...lit,
+  }));
+  face.position.set(0, LID / 2, 12);
+  lid.add(face);
+  lid.position.set(0, top, -D / 2 + 11);
+  lid.rotation.x = -0.3;
+  g.add(lid);
+  return g;
+}
+
+/** Whichever of the two is open at the moment. */
+function laptop() {
+  return model().id === 'tinkerbel' ? tinkerbel() : nero();
 }
 
 function books() {
@@ -453,12 +571,7 @@ export function buildProps(
   // wall. Nine of them still come to less than the room.
   const budget = Math.round(quality().rayBudget * 0.035);
 
-  for (const def of PROPS) {
-    const g = def.build();
-    const at = saved[def.id];
-    g.position.set(at?.x ?? def.x, COUNTER.top, at?.z ?? def.z);
-    g.rotation.y = at?.rotation ?? def.rotation;
-
+  const light = (def: PropDef, g: THREE.Group) =>
     bakeLight(g, {
       rayBudget: budget,
       ground: COUNTER.top,
@@ -476,10 +589,20 @@ export function buildProps(
       },
     });
 
+  const mark = (def: PropDef, g: THREE.Group) => {
     g.userData.propId = def.id;
     g.traverse((o) => {
       o.userData.propId = def.id;
     });
+  };
+
+  for (const def of PROPS) {
+    const g = def.build();
+    const at = saved[def.id];
+    g.position.set(at?.x ?? def.x, COUNTER.top, at?.z ?? def.z);
+    g.rotation.y = at?.rotation ?? def.rotation;
+    light(def, g);
+    mark(def, g);
     group.add(g);
     placed.push({ def, group: g });
   }
@@ -491,6 +614,41 @@ export function buildProps(
      camera. */
   onPaint((f) => {
     coat?.(f);
+    settled();
+  });
+
+  /*
+   * The other machine, in the same place.
+   *
+   * A colour is a uniform; a different laptop is different triangles, and the
+   * only honest way to get them is to build them. But only this one prop: the
+   * room, the board and the other eight things on the counter have no opinion
+   * about which laptop it is, and tearing the scene down to change one object
+   * on it would throw away every bake in the room to avoid writing this.
+   *
+   * What carries over is where it was standing. Somebody who has pushed the
+   * laptop to the end of the counter and then tries the other one has not
+   * asked for it back in the middle.
+   */
+  onSwap(() => {
+    const entry = placed.find((p) => p.def.id === 'laptop');
+    if (!entry) return;
+    const { x, z } = entry.group.position;
+    const turned = entry.group.rotation.y;
+
+    group.remove(entry.group);
+    entry.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+    });
+
+    const g = entry.def.build();
+    g.position.set(x, COUNTER.top, z);
+    g.rotation.y = turned;
+    light(entry.def, g);
+    mark(entry.def, g);
+    group.add(g);
+    entry.group = g;
     settled();
   });
 

@@ -965,6 +965,328 @@ export function anodised(): Maps {
   return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
 }
 
+/**
+ * Soft-touch plastic, the way a business laptop is finished.
+ *
+ * The opposite argument to the anodising above. That surface is trying to
+ * catch the window; this one is trying not to — a moulded grain fine enough to
+ * hide a fingerprint, which is the entire brief of the material and the reason
+ * a machine wearing it reads as a tool rather than as jewellery. So the pits
+ * are wider and shallower than blasting leaves, and the roughness band sits
+ * high and narrow: matte everywhere, and no part of it ever quite shines.
+ */
+export function softTouch(): Maps {
+  const ck = 'soft';
+  if (!cache.has(`${ck}:n`)) {
+    const rnd = rng(30412);
+    const h = canvas(512, (ctx, s) => {
+      ctx.fillStyle = '#8a8a8a';
+      ctx.fillRect(0, 0, s, s);
+      // a moulded pebble: overlapping soft dimples rather than sharp pitting
+      for (let i = 0; i < 5200; i++) {
+        const r = 1.4 + rnd() * 2.6;
+        const v = rnd() > 0.5 ? 235 : 30;
+        ctx.fillStyle = `rgba(${v},${v},${v},${0.05 + rnd() * 0.09})`;
+        ctx.beginPath();
+        ctx.arc(rnd() * s, rnd() * s, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+    cache.set(`${ck}:n`, tex(heightToNormal(h, 0.5), 1 / 620, false));
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.82, 1), 1 / 620, false));
+  }
+  return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
+}
+
+/* ------------------------------------------------------------ the other one */
+
+/**
+ * The Tinkerbel's deck: keys that smile, a red dot, and three buttons.
+ *
+ * Every recognisable thing about this keyboard is something the other one does
+ * not have. The caps are scooped along the bottom edge — a bigger radius on
+ * the two lower corners and nothing else, which at this size is the whole of
+ * it. There is a red nub in the middle of the letters, where the index fingers
+ * of a certain generation still reach for it. And underneath, where the other
+ * machine has bare palm rest, there are three buttons, because the pointing
+ * device this keyboard was designed around needs somewhere to click.
+ *
+ * The nub is the reason this is inked twice rather than tinted from its own
+ * relief, the way the wood in this file is. It is the one part of the surface
+ * whose colour is not a function of its depth: a bump like any other bump, in
+ * the one colour nobody would guess from looking at a height field.
+ */
+interface ThinkDeck {
+  floor: string;
+  skirt: string;
+  cap: string;
+  button: string;
+  nub: string;
+  stripe: string;
+}
+
+function thinkDeckOf(p: ThinkDeck) {
+  return sheet(1024, 444, (ctx, w, d) => {
+    ctx.fillStyle = p.floor;
+    ctx.fillRect(0, 0, w, d);
+
+    const rr = (x: number, y: number, kw: number, kh: number, r: number | number[], fill: string) => {
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.roundRect(x, y, kw, kh, r as number[]);
+      ctx.fill();
+    };
+
+    /* Square at the top, scooped at the bottom. One array of corner radii is
+       the difference between this keyboard and every other keyboard. */
+    const cap = (x: number, y: number, kw: number, kh: number) => {
+      rr(x, y, kw, kh, [4, 4, 10, 10], p.skirt);
+      rr(x + 2, y + 2, kw - 4, kh - 4.5, [3, 3, 8.5, 8.5], p.cap);
+    };
+
+    const x0 = 14;
+    const span = 996;
+    const gap = 6;
+    const letters = (n: number) => Array<number>(n).fill(1);
+    const row = (y: number, kh: number, widths: number[], width = span) => {
+      const unit = (width - gap * (widths.length - 1)) / widths.reduce((a, b) => a + b, 0);
+      let x = x0;
+      for (const rel of widths) {
+        cap(x, y, unit * rel, kh);
+        x += unit * rel + gap;
+      }
+      return x;
+    };
+
+    row(8, 42, [1.3, ...letters(12), 1.3]);
+    row(54, 52, [...letters(13), 1.9]);
+    row(110, 52, [1.5, ...letters(12), 1.25]);
+    row(166, 52, [1.8, ...letters(11), 1.95]);
+    row(222, 52, [2.35, ...letters(10), 2.35]);
+    const end = row(278, 52, [1, 1, 1, 1.3, 5.6, 1.3, 1], span - 168);
+
+    // the inverted T, with the page keys stacked either side of the up arrow
+    const aw = (x0 + span - end - gap * 2) / 3;
+    cap(end, 278, aw, 52);
+    cap(end + aw + gap, 278, aw, 23);
+    cap(end + aw + gap, 307, aw, 23);
+    cap(end + (aw + gap) * 2, 278, aw, 52);
+
+    /* The nub, sitting in the gap between the two middle rows where G, H and B
+       meet — which is where it has been on every one of these for thirty odd
+       years, and the one place a finger goes looking for it. */
+    ctx.fillStyle = p.nub;
+    ctx.beginPath();
+    ctx.roundRect(486, 206, 30, 30, 9);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    for (let i = 0; i < 4; i++) {
+      ctx.fillRect(490, 212 + i * 6, 22, 2);
+    }
+
+    // and the three buttons it clicks with, the middle one marked
+    const bw = 540;
+    const bx = 501 - bw / 2;
+    const by = 348;
+    const bh = 80;
+    const thirds = [190, 156, 190];
+    let cx = bx;
+    thirds.forEach((tw, i) => {
+      rr(cx, by, tw, bh, [7, 7, 9, 9], p.skirt);
+      rr(cx + 2, by + 2, tw - 4, bh - 4, [6, 6, 8, 8], p.button);
+      if (i === 1) {
+        ctx.fillStyle = p.stripe;
+        ctx.fillRect(cx + 16, by + 7, tw - 32, 5);
+      }
+      cx += tw + 7;
+    });
+  });
+}
+
+export function thinkDeck(): Maps {
+  const ck = 'think-deck';
+  if (!cache.has(ck)) {
+    const relief = thinkDeckOf({
+      floor: '#1f1f1f', skirt: '#8b8b8b', cap: '#e4e4e4',
+      button: '#cfcfcf', nub: '#f0f0f0', stripe: '#6a6a6a',
+    });
+    const colour = thinkDeckOf({
+      floor: '#141416', skirt: '#2a2a2c', cap: '#37373a',
+      button: '#2f2f32', nub: '#c0392b', stripe: '#d9452f',
+    });
+    cache.set(ck, clamped(tex(colour, 1, true)));
+    cache.set(`${ck}:n`, clamped(tex(heightToNormal(relief, 1.6), 1, false)));
+    // moulded plastic, and matt with it — these were never meant to shine
+    if (wantRoughness()) cache.set(`${ck}:r`, clamped(tex(levels(relief, 0.62, 0.92), 1, false)));
+  }
+  return {
+    map: cache.get(ck),
+    normalMap: cache.get(`${ck}:n`),
+    roughnessMap: cache.get(`${ck}:r`),
+  };
+}
+
+/**
+ * The Tinkerbel's display, bezels and badges and all.
+ *
+ * Where the other machine's lid is nearly all screen, this one wears its frame
+ * openly: a thumb of black either side, a shelf above it for a camera that has
+ * a physical shutter, and a chin deep enough to put the maker's name on. That
+ * chin is not a compromise on this machine, it is the house style — and it is
+ * most of what tells the two lids apart from across a room, long before you
+ * can read a word of it.
+ */
+export function thinkScreen(): Maps {
+  const ck = 'think-screen';
+  if (!cache.has(ck)) {
+    const face = sheet(1024, 747, (ctx, w, h) => {
+      const bezel = '#141416';
+      ctx.fillStyle = bezel;
+      ctx.fillRect(0, 0, w, h);
+
+      const x0 = 30;
+      const y0 = 36;
+      const sw = w - 60;
+      const sh = h - y0 - 82;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0, y0, sw, sh);
+      ctx.clip();
+
+      /* A desktop of the other persuasion: pale, cool, and blooming out of the
+         middle, against the warm dark thing on the Nero. Two machines on one
+         counter should not be showing the same picture. */
+      const sky = ctx.createLinearGradient(x0, y0, x0 + sw * 0.3, y0 + sh);
+      sky.addColorStop(0, '#cfe2ef');
+      sky.addColorStop(0.55, '#dce9f2');
+      sky.addColorStop(1, '#c6dcec');
+      ctx.fillStyle = sky;
+      ctx.fillRect(x0, y0, sw, sh);
+
+      /*
+       * The bloom: blades turned about one point, and it is the turning that
+       * does it. Petals that keep their distance from the centre while the
+       * angle runs round them open into a flower; petals that shrink toward
+       * the same centre only nest, and what you get is a bullseye — which is
+       * the difference between this and the first way I drew it.
+       */
+      const cx = x0 + sw * 0.54;
+      const cy = y0 + sh * 0.56;
+      const blades: Array<[number, number, string]> = [
+        [-1.18, 0.47, '#2f6fd0'],
+        [-0.82, 0.45, '#3f86dd'],
+        [-0.46, 0.42, '#7e8ee2'],
+        [-0.1, 0.39, '#d9679a'],
+        [0.26, 0.35, '#e88fb0'],
+        [0.62, 0.3, '#ef9d5e'],
+        [0.98, 0.25, '#f6c88f'],
+      ];
+      ctx.filter = 'blur(3px)';
+      for (const [turn, len, tint] of blades) {
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(turn);
+        ctx.fillStyle = tint;
+        ctx.globalAlpha = 0.72;
+        ctx.beginPath();
+        ctx.ellipse(0, -sh * len * 0.62, sh * len * 0.3, sh * len * 0.72, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+
+      // the light coming off it, so the flat fill stops being a flat fill
+      const gloss = ctx.createLinearGradient(x0, y0, x0 + sw * 0.6, y0 + sh);
+      gloss.addColorStop(0, 'rgba(255,255,255,0.3)');
+      gloss.addColorStop(0.5, 'rgba(255,255,255,0.05)');
+      gloss.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = gloss;
+      ctx.fillRect(x0, y0, sw, sh);
+
+      // a bar along the bottom with its handful of things, in the middle
+      const tb = y0 + sh - 34;
+      ctx.fillStyle = 'rgba(245,250,253,0.72)';
+      ctx.fillRect(x0, tb, sw, 34);
+      const icons = ['#3f7fd0', '#5b9bd8', '#e4a04e', '#8aa4b8', '#5f8f6a', '#b96f8a'];
+      icons.forEach((tint, i) => {
+        ctx.fillStyle = tint;
+        ctx.beginPath();
+        ctx.roundRect(cx - icons.length * 17 + i * 34 + 5, tb + 8, 19, 19, 5);
+        ctx.fill();
+      });
+      ctx.restore();
+
+      /* The camera shelf. A shutter you can actually slide is the detail this
+         kind of machine is bought for, so it gets drawn even at this size. */
+      ctx.fillStyle = '#0d0d0f';
+      ctx.beginPath();
+      ctx.roundRect(w / 2 - 96, 5, 192, y0 - 10, 6);
+      ctx.fill();
+      ctx.fillStyle = '#24262a';
+      ctx.beginPath();
+      ctx.arc(w / 2, y0 / 2, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(140,170,200,0.55)';
+      ctx.beginPath();
+      ctx.arc(w / 2 - 2, y0 / 2 - 2, 2.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#3a3d42';
+      ctx.beginPath();
+      ctx.roundRect(w / 2 + 34, y0 / 2 - 5, 26, 10, 3);
+      ctx.fill();
+
+      // the maker, bottom left, and what it is, bottom right
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#b9bcc2';
+      ctx.font = '700 26px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('Levona', x0 + 4, h - 42);
+      ctx.fillStyle = '#6e7178';
+      ctx.font = '600 20px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('TB14', w - x0 - 4, h - 42);
+    });
+
+    cache.set(ck, clamped(tex(face, 1, true)));
+  }
+  return { map: cache.get(ck) };
+}
+
+/**
+ * The wordmark on the palm rest, with the light on its i.
+ *
+ * A cut-out card rather than paint on the case, because the case is one
+ * extrusion and its UVs are in the units it was drawn in — fine for a grain
+ * that tiles, useless for a word that has to land in one place at one size.
+ */
+export function tinkerMark(): THREE.Texture {
+  const ck = 'tinker-mark';
+  if (!cache.has(ck)) {
+    const c = sheet(512, 128, (ctx, w, h) => {
+      ctx.clearRect(0, 0, w, h);
+      ctx.font = '800 74px ui-sans-serif, system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#e9e6e0';
+      ctx.fillText('TinkerBel', 6, h / 2 + 4);
+      /* The dot over the i, which on one of these is a light that tells you it
+         is awake. Measured rather than guessed: the glyph it sits on is the
+         second one, so where it lands is the width of the first plus half the
+         width of its own. */
+      const t = ctx.measureText('T').width;
+      const i = ctx.measureText('i').width;
+      ctx.fillStyle = '#d9452f';
+      ctx.beginPath();
+      ctx.arc(6 + t + i / 2, h / 2 - 27, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }, 0);
+    cache.set(ck, clamped(tex(c, 1, true)));
+  }
+  return cache.get(ck)!;
+}
+
 /** Everything above, dropped at once. */
 export function disposeTextures() {
   cache.forEach((t) => t.dispose());

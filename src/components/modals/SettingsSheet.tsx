@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useCork } from '../../lib/store';
 import { setGraphicsPref, useGraphics, type GraphicsPref, type Tier } from '../../scene/quality';
-import { FINISHES, setFinish, useFinish } from '../../scene/finish';
+import { MODELS, setFinish, setModel, useLaptop } from '../../scene/models';
 import { startTour } from '../../lib/tour';
 import { Wordmark } from '../chrome/Wordmark';
 
@@ -32,7 +32,7 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
   const deleteBoard = useCork((s) => s.deleteBoard);
   const resetEverything = useCork((s) => s.resetEverything);
   const { pref, tier } = useGraphics();
-  const finish = useFinish();
+  const { model, finish } = useLaptop();
   const board = boards.find((b) => b.id === activeBoardId);
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -109,9 +109,29 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
 
         <div className="hairline my-5" />
 
-        <span className="eyebrow">Fujikey Nero</span>
+        <span className="eyebrow">The laptop</span>
+        <div className="mt-2 flex gap-1.5 rounded-[11px] bg-[rgba(120,92,62,0.09)] p-1">
+          {MODELS.map((m) => {
+            const on = m.id === model.id;
+            return (
+              <button
+                key={m.id}
+                onClick={() => setModel(m.id)}
+                aria-pressed={on}
+                className="flex-1 rounded-[8px] py-[7px] text-[12.5px] font-bold transition-colors"
+                style={{
+                  background: on ? 'rgba(255,253,247,0.95)' : 'transparent',
+                  color: on ? '#2f2419' : '#7d6f64',
+                  boxShadow: on ? '0 1px 2px rgba(52,34,18,0.14)' : 'none',
+                }}
+              >
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
         <div className="mt-3 flex items-center gap-[13px]">
-          {FINISHES.map((f) => {
+          {model.finishes.map((f) => {
             const on = f.id === finish.id;
             return (
               <button
@@ -134,9 +154,12 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
           })}
         </div>
         <p className="mt-3 text-[13px] leading-[1.5] text-[#5d4f42]">
-          <span className="font-bold text-[#3f362a]">{finish.label}.</span> Anodised rather than
-          painted, so the colour sits in the metal and the window still comes off it. The keys, the
-          bezel and the wallpaper stay as they are.
+          <span className="font-bold text-[#3f362a]">{finish.label}.</span>{' '}
+          {model.id === 'nero'
+            ? 'Anodised rather than painted, so the colour sits in the metal and the window still comes off it.'
+            : 'Soft-touch over a box that was never trying to be thin — matt enough that the window barely finds it.'}{' '}
+          Each machine remembers its own colour; changing the colour is instant, changing the
+          machine builds the new one where the old one was standing.
         </p>
 
         <div className="hairline my-5" />

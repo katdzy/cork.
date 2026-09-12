@@ -1,21 +1,21 @@
 import { motion } from 'framer-motion';
-import { FINISHES, setFinish, useFinish } from '../../scene/finish';
+import { MODELS, setFinish, setModel, useLaptop } from '../../scene/models';
 
 /**
- * The laptop's colours, over the laptop.
+ * The laptop's own controls, over the laptop.
  *
- * The same six that are in Settings, put where the thing they change is. A
- * preference about an object you can see is a strange thing to have to go and
- * find in a sheet: here the swatch and the machine are in the same glance, and
- * choosing one is a before-and-after rather than a guess followed by a trip
- * back to the room to see what you did.
+ * Which machine, and then what colour it came in. Put where the thing they
+ * change is: a preference about an object you can see is a strange thing to
+ * have to go and find in a sheet, and here the swatch and the machine are in
+ * the same glance, so choosing one is a before-and-after rather than a guess
+ * followed by a trip back to the room to see what you did.
  *
- * It hangs above the lid and points down at it, which is what keeps it read as
- * belonging to the laptop rather than floating over the counter — a panel with
- * nothing tying it to a thing is chrome, and there is enough of that already.
+ * It hangs above the lid and points down at it, which is what keeps it reading
+ * as belonging to the laptop rather than floating over the counter — a panel
+ * with nothing tying it to a thing is chrome, and there is enough of that.
  */
 export function FinishPicker({ at }: { at: { x: number; y: number } }) {
-  const finish = useFinish();
+  const { model, finish } = useLaptop();
 
   return (
     <motion.div
@@ -25,7 +25,7 @@ export function FinishPicker({ at }: { at: { x: number; y: number } }) {
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ type: 'spring', stiffness: 460, damping: 32 }}
-      className="panel-solid absolute z-30 rounded-[15px] px-3 pb-[11px] pt-2"
+      className="panel-solid absolute z-30 rounded-[15px] px-3 pb-[11px] pt-[7px]"
       style={{
         left: at.x,
         top: at.y - 18,
@@ -35,9 +35,28 @@ export function FinishPicker({ at }: { at: { x: number; y: number } }) {
         transformOrigin: 'bottom center',
       }}
     >
-      <span className="eyebrow block text-center text-[9px]">{finish.label}</span>
-      <div className="mt-[7px] flex items-center gap-[9px]">
-        {FINISHES.map((f) => {
+      <div className="flex items-center justify-center gap-[3px]">
+        {MODELS.map((m) => {
+          const on = m.id === model.id;
+          return (
+            <button
+              key={m.id}
+              onClick={() => setModel(m.id)}
+              aria-pressed={on}
+              className="rounded-full px-[9px] py-[3px] text-[10px] font-bold uppercase tracking-[0.1em] transition-colors"
+              style={{
+                background: on ? 'rgba(120,92,62,0.14)' : 'transparent',
+                color: on ? '#3f362a' : '#a2958a',
+              }}
+            >
+              {m.short}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-[7px] flex items-center justify-center gap-[9px]">
+        {model.finishes.map((f) => {
           const on = f.id === finish.id;
           return (
             <button
