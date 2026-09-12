@@ -7,7 +7,7 @@ import { BOARD_H, BOARD_W } from '../lib/types';
 import { memoryBounds } from '../lib/utils';
 import { CORK_VIEW, COUNTER, EYE_BOX } from './layout';
 import { SCENES, disposeScene, type SceneId } from './themes';
-import { buildProps, type PlacedProp } from './props';
+import { animateProps, buildProps, isDocked, reseat, type PlacedProp } from './props';
 import { Orbit } from './orbit';
 import { captureProbe, disposeNeutral, type Probe } from './probe';
 import { cancelBakes } from './bake';
@@ -474,6 +474,9 @@ export function useRoomScene(
         boardMoving = false;
         boardEl.classList.remove('board-moving');
       }
+      // the charging screen, which is the one thing here that moves on its own
+      if (animateProps(now / 1000)) needsRender = true;
+
       if (!needsRender) return;
       needsRender = false;
 
@@ -707,6 +710,8 @@ export function useRoomScene(
           COUNTER.top,
           clamp(p.z + grabOffset.z, b.minZ, b.maxZ),
         );
+        // the magnet gets a say before the frame does
+        reseat(props.placed, dragged.def.id);
         renderer.shadowMap.needsUpdate = true;
         needsRender = true;
       }
@@ -738,10 +743,12 @@ export function useRoomScene(
     const up = (e: React.PointerEvent) => {
       pointers.delete(e.pointerId);
       if (mode === 'prop' && dragged) {
+        reseat(props.placed, dragged.def.id);
         placeProp(dragged.def.id, {
           x: Math.round(dragged.group.position.x),
           z: Math.round(dragged.group.position.z),
           rotation: Number(dragged.group.rotation.y.toFixed(3)),
+          ...(dragged.def.id === 'phone' ? { docked: isDocked() } : null),
         });
       }
       if (mode !== 'none' && !moved && !(e.target as HTMLElement).closest('[data-memory-id]')) {

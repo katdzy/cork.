@@ -109,6 +109,8 @@ export interface PropPlacement {
   x: number;
   z: number;
   rotation: number;
+  /** Standing on the charger rather than lying on the counter. */
+  docked?: boolean;
 }
 
 /**

@@ -3,8 +3,9 @@ import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/Buffer
 import { COUNTER } from './layout';
 import { foliage } from './parts';
 import { bakeLight, mergeStatic } from './bake';
-import { quality } from './quality';
-import { anodised, keyboard, oak, screen, softTouch, thinkDeck, thinkScreen, tinkerMark, weave } from './textures';
+import { quality, texSize } from './quality';
+import type { PropPlacement } from '../lib/types';
+import { anodised, keyboard, lenses, oak, pearl, screen, softTouch, thinkDeck, thinkScreen, tinkerMark, weave } from './textures';
 import { finish, model, onPaint, onSwap, type Finish } from './models';
 
 /**
@@ -136,12 +137,16 @@ function slab(
  * one surface where that is wrong, since the picture has to land on it exactly
  * once. So these are put back to nought-and-one, the way a plane's are.
  */
-function panel(w: number, h: number, r: number, m: THREE.Material) {
+function panel(w: number, h: number, r: number, m: THREE.Material, mirror = false) {
   const g = new THREE.ShapeGeometry(rounded(w, h, r), SEGMENTS);
   const uv = g.attributes.uv as THREE.BufferAttribute;
   const at = g.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < uv.count; i++) {
-    uv.setXY(i, at.getX(i) / w + 0.5, at.getY(i) / h + 0.5);
+    /* A face that ends up pointing away from the viewer is read from behind,
+       and a word on it comes out backwards. Mirroring the coordinates is the
+       fix that costs nothing at draw time — the alternative is a second
+       rotation and an argument with Euler order. */
+    uv.setXY(i, (mirror ? -at.getX(i) : at.getX(i)) / w + 0.5, at.getY(i) / h + 0.5);
   }
   return new THREE.Mesh(g, m);
 }
@@ -407,6 +412,231 @@ function laptop() {
   return model().id === 'tinkerbel' ? tinkerbel() : nero();
 }
 
+/* ------------------------------------------------------------------ phone */
+
+/** Seventy-two millimetres across, and every other number follows from it. */
+const PHONE = { w: 221, d: 451, thick: 22, r: 31 };
+
+/**
+ * Where the handset ends up when the magnet takes it, relative to the dock.
+ *
+ * The lean is the whole design of one of these: upright enough to read from
+ * across a counter, tipped back enough that it is looking at your face rather
+ * than at the ceiling. Fifteen degrees is where a phone on a stand has always
+ * sat, and it is not a coincidence that it is also roughly where a photograph
+ * leans in a frame.
+ */
+const DOCK = { lift: 236, out: 26, lean: 0.26, magnet: 430 };
+
+/** A canvas the phone is charging on, and the hand that redraws it. */
+interface Screen {
+  texture: THREE.CanvasTexture;
+  draw(seconds: number): void;
+}
+
+function handsetScreen(): Screen {
+  const W = texSize(384, 1);
+  const H = Math.round(W * (812 / 384));
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d')!;
+  const s = W / 384;
+  const texture = new THREE.CanvasTexture(c);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+
+  const draw = (seconds: number) => {
+    ctx.save();
+    ctx.scale(s, s);
+    const w = 384;
+    const h = 812;
+
+    ctx.fillStyle = '#07080a';
+    ctx.fillRect(0, 0, w, h);
+
+    /* Off the charger it is asleep, which is a black rectangle and no more.
+       Worth drawing rather than leaving the last frame up: a phone lying face
+       down on a counter with a lit screen under it is a phone somebody is
+       about to be annoyed with. */
+    if (seconds < 0) {
+      ctx.restore();
+      texture.needsUpdate = true;
+      return;
+    }
+
+    /* The whole screen breathes with the fill, because a phone charging in the
+       corner of your eye is a glow that comes and goes rather than a number
+       you read. The number is there for when you do look. */
+    const cycle = (seconds % 6) / 6;
+    const pct = Math.min(100, Math.round(18 + cycle * 82));
+    const glow = ctx.createRadialGradient(w / 2, h * 0.44, 10, w / 2, h * 0.44, w * 0.9);
+    glow.addColorStop(0, `rgba(126,214,146,${0.16 + 0.1 * Math.sin(seconds * 1.6)})`);
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, h);
+
+    const cx = w / 2;
+    const cy = h * 0.44;
+    const r = w * 0.3;
+
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.lineWidth = 16;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#6fd489';
+    ctx.lineWidth = 16;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (pct / 100));
+    ctx.stroke();
+
+    // the bolt, which is the one glyph that means this everywhere
+    ctx.fillStyle = '#eafbee';
+    ctx.beginPath();
+    ctx.moveTo(cx + 12, cy - 44);
+    ctx.lineTo(cx - 18, cy + 6);
+    ctx.lineTo(cx - 1, cy + 6);
+    ctx.lineTo(cx - 11, cy + 46);
+    ctx.lineTo(cx + 19, cy - 6);
+    ctx.lineTo(cx + 2, cy - 6);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#f2f5f3';
+    ctx.textAlign = 'center';
+    ctx.font = '700 46px ui-sans-serif, system-ui, sans-serif';
+    ctx.fillText(`${pct}%`, cx, cy + r + 74);
+
+    ctx.fillStyle = 'rgba(226,232,229,0.4)';
+    ctx.font = '600 22px ui-sans-serif, system-ui, sans-serif';
+    ctx.letterSpacing = '3px';
+    ctx.fillText('CHARGING', cx, cy + r + 112);
+    ctx.letterSpacing = '0px';
+
+    // the time, up where a phone always puts it
+    ctx.fillStyle = '#e8ece9';
+    ctx.font = '300 74px ui-sans-serif, system-ui, sans-serif';
+    ctx.fillText('9:41', cx, h * 0.17);
+
+    ctx.restore();
+    texture.needsUpdate = true;
+  };
+
+  draw(-1);
+  return { texture, draw };
+}
+
+let lit: Screen | null = null;
+
+/**
+ * The fujiPhone Max, face down on the counter.
+ *
+ * Built lying flat with its screen up, and then turned over by whoever places
+ * it — which is the only orientation worth modelling from, because it is the
+ * one every other pose is a rotation of. Face down on the wood, or up on the
+ * charger: the same object, twice.
+ *
+ * Titanium white, and it is the one prop here I chose the colour of. A phone
+ * is the most photographed object of the last twenty years and the colour it
+ * is photographed in is always this one — a pale coating that reads warm
+ * against oak and cold against concrete, which happens to be exactly the two
+ * rooms it has to live in.
+ */
+function phone() {
+  const g = new THREE.Group();
+  const half = PHONE.thick / 2;
+
+  const frame = new THREE.MeshStandardMaterial({
+    color: 0xd7d4cd, roughness: 0.34, metalness: 0.62, envMapIntensity: 1.2, ...anodised(),
+  });
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.1, metalness: 0.02, envMapIntensity: 0.8, ...pearl(),
+  });
+
+  const body = slab(PHONE.w, PHONE.d, PHONE.thick, PHONE.r, frame);
+  body.position.y = -half;
+  part(g, body);
+
+  // the back, which is the side you are meant to be looking at
+  const back = panel(PHONE.w - 5, PHONE.d - 5, PHONE.r - 3, glass, true);
+  back.rotation.x = Math.PI / 2;
+  back.position.y = -half - 0.7;
+  part(g, back);
+
+  /* The plateau. Big enough that it is the first thing you see and the reason
+     the thing will not lie flat on a table — which is, at this point, simply
+     what a camera on a phone is. */
+  const island = slab(PHONE.w * 0.62, PHONE.w * 0.62, 8, 30, frame);
+  island.position.set(-PHONE.w * 0.11, -half - 8, -PHONE.d * 0.27);
+  part(g, island);
+
+  const plate = panel(PHONE.w * 0.62 - 9, PHONE.w * 0.62 - 9, 26, new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.36, metalness: 0.35, envMapIntensity: 1, ...lenses(),
+  }), true);
+  plate.rotation.x = Math.PI / 2;
+  plate.position.set(-PHONE.w * 0.11, -half - 8.7, -PHONE.d * 0.27);
+  part(g, plate);
+
+  lit = handsetScreen();
+  const face = panel(PHONE.w - 17, PHONE.d - 17, PHONE.r - 9, new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.08,
+    envMapIntensity: 0.3,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.55,
+    map: lit.texture,
+    emissiveMap: lit.texture,
+  }));
+  face.rotation.x = -Math.PI / 2;
+  face.position.y = half + 0.7;
+  part(g, face);
+
+  // volume down the one side, sleep down the other
+  for (const [x, z, len] of [[-1, -58, 74], [-1, 34, 74], [1, -22, 96]] as [number, number, number][]) {
+    part(g, bx(7, 11, len, frame, (x * PHONE.w) / 2, -half + 3, z));
+  }
+
+  return g;
+}
+
+/**
+ * The stand it goes on: a weight, a neck and a magnet.
+ *
+ * All three of those are the same idea — a phone stood up wants to fall over,
+ * and every one of these ever sold is an argument about where to put the mass
+ * so it does not. The base is most of the object for that reason, and the neck
+ * leans back rather than standing straight because the phone's own weight has
+ * to fall inside the base or the whole thing tips the first time you tap it.
+ */
+function dock() {
+  const g = new THREE.Group();
+  const metal = new THREE.MeshStandardMaterial({
+    color: 0xd9d6cf, roughness: 0.36, metalness: 0.58, envMapIntensity: 1.15, ...anodised(),
+  });
+  const pad = new THREE.MeshStandardMaterial({ color: 0xf2efe8, roughness: 0.62 });
+
+  const foot = part(g, cyl(168, 182, 26, metal, 18));
+  foot.position.y = 13;
+
+  // the neck, leaning back under the phone it is about to hold up
+  const neck = part(g, bx(74, 226, 30, metal, 0, 0, 0));
+  neck.position.set(0, 128, -34);
+  neck.rotation.x = 0.26;
+
+  const puck = part(g, cyl(104, 104, 16, pad, 18));
+  puck.position.set(0, DOCK.lift - 8, DOCK.out - 14);
+  puck.rotation.x = Math.PI / 2 - DOCK.lean;
+
+  const ring = part(g, new THREE.Mesh(new THREE.TorusGeometry(96, 4.5, 4, 18), metal));
+  ring.position.copy(puck.position);
+  ring.rotation.x = puck.rotation.x;
+
+  return g;
+}
+
 function books() {
   const g = new THREE.Group();
   const tints = [0x6d5545, 0x8a6a4a, 0x4d5a4f, 0x9a7a5c];
@@ -536,6 +766,8 @@ export const PROPS: readonly PropDef[] = [
   { id: 'laptop', label: 'Fujikey Nero', x: -640, z: 940, rotation: 0.06, radius: 520, build: laptop },
   { id: 'books', label: 'Books', x: 480, z: 700, rotation: 0.12, radius: 400, build: books },
   { id: 'pens', label: 'Pens', x: 1200, z: 470, rotation: 0, radius: 160, build: pens },
+  { id: 'dock', label: 'Charging stand', x: 1560, z: 1380, rotation: 0.03, radius: 230, build: dock },
+  { id: 'phone', label: 'fujiPhone Max', x: 2020, z: 1420, rotation: -0.24, radius: 180, build: phone },
   { id: 'crate', label: 'Crate', x: 2560, z: 1180, rotation: -0.16, radius: 340, build: crate },
   { id: 'herbs', label: 'Herbs', x: 3420, z: 820, rotation: 0, radius: 340, build: herbs },
 ];
@@ -543,6 +775,90 @@ export const PROPS: readonly PropDef[] = [
 export interface PlacedProp {
   def: PropDef;
   group: THREE.Group;
+}
+
+/* -------------------------------------------------------------- the magnet */
+
+/** Whether the handset is on the charger. Its whole pose is a function of it. */
+let docked = false;
+let lastDrawn = -1;
+
+export const isDocked = () => docked;
+
+/**
+ * Put the handset where it belongs: flat on the wood, or up on the stand.
+ *
+ * Two poses of one object, and the interesting one is the first. A phone left
+ * on a counter is face down — not because anybody decided to, but because that
+ * is what a hand does with a phone it has finished with, and a phone lying
+ * screen-up on a kitchen worktop reads instantly as staged. So the resting
+ * pose is a half turn, and the camera you spent all that money on is the part
+ * that shows.
+ *
+ * On the stand it is the other way up and leaning back, and the screen comes
+ * on — which is the entire reason anybody buys one of these stands.
+ */
+function pose(handset: THREE.Group, stand: THREE.Group | undefined) {
+  if (docked && stand) {
+    handset.position.set(
+      stand.position.x,
+      COUNTER.top + DOCK.lift,
+      stand.position.z + DOCK.out,
+    );
+    handset.rotation.set(Math.PI / 2 - DOCK.lean, stand.rotation.y, 0);
+    return;
+  }
+  handset.position.y = COUNTER.top + PHONE.thick / 2;
+  handset.rotation.set(Math.PI, handset.rotation.y, 0);
+}
+
+/**
+ * Work out whether the magnet has it, and put it where that means.
+ *
+ * Called on every frame of a drag rather than only when the thing is let go,
+ * because a magnet you cannot feel until afterwards is not a magnet. Dragging
+ * the phone towards the stand should have it stand up while it is still under
+ * your hand; dragging it away should drop it flat again in the same motion.
+ *
+ * Dragging the *stand* is the other half: something already on it is held on,
+ * and goes where the stand goes.
+ */
+export function reseat(placed: readonly PlacedProp[], moving: string | null) {
+  const handset = placed.find((p) => p.def.id === 'phone');
+  const stand = placed.find((p) => p.def.id === 'dock');
+  if (!handset) return;
+
+  if (moving === 'phone' && stand) {
+    const dx = handset.group.position.x - stand.group.position.x;
+    const dz = handset.group.position.z - stand.group.position.z;
+    docked = Math.hypot(dx, dz) < DOCK.magnet;
+  }
+  pose(handset.group, stand?.group);
+}
+
+/**
+ * The one thing in either room that moves while nobody is touching it.
+ *
+ * Everything else here is drawn once and then costs nothing until the camera
+ * moves, which is the property the whole scene is built on — so a screen that
+ * animates is a deliberate hole in it, and it is kept as small as the hole can
+ * be. Ten frames a second rather than sixty, nothing at all unless the phone
+ * is actually on the charger, and the moment it comes off the room goes quiet
+ * again.
+ */
+export function animateProps(seconds: number): boolean {
+  if (!lit) return false;
+  if (!docked) {
+    // one last frame, to put it to sleep
+    if (lastDrawn < 0) return false;
+    lastDrawn = -1;
+    lit.draw(-1);
+    return true;
+  }
+  if (lastDrawn >= 0 && seconds - lastDrawn < 0.1) return false;
+  lastDrawn = seconds;
+  lit.draw(seconds);
+  return true;
 }
 
 /**
@@ -561,7 +877,7 @@ export interface PlacedProp {
  * its own group so that it can still be carried around afterwards.
  */
 export function buildProps(
-  saved: Record<string, { x: number; z: number; rotation: number }>,
+  saved: Record<string, PropPlacement>,
   settled: () => void,
 ): { group: THREE.Group; placed: PlacedProp[] } {
   const group = new THREE.Group();
@@ -606,6 +922,12 @@ export function buildProps(
     group.add(g);
     placed.push({ def, group: g });
   }
+
+  /* The handset is the one prop whose saved position is not the whole of where
+     it is: on the charger it borrows the charger's, and which of the two it is
+     doing has to survive a reload. */
+  docked = saved.phone?.docked ?? false;
+  reseat(placed, null);
 
   /* Recolouring is one uniform and no rebuild — but the room is drawn on
      demand, so putting the colour on and asking for the frame that would show

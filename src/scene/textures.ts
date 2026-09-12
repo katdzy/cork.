@@ -1287,6 +1287,180 @@ export function tinkerMark(): THREE.Texture {
   return cache.get(ck)!;
 }
 
+/* ------------------------------------------------------------------ phone */
+
+/**
+ * The back of the handset: pearl over a facet.
+ *
+ * The finish these are sold on is not a colour, it is a disagreement between
+ * two of them. A pale coating over a brushed substrate throws warm one way and
+ * cool the other, and the fold between them moves as the thing turns — which
+ * is why the press shots are always at an angle and never flat on. None of
+ * that survives being painted as a tint, so it is painted as geometry instead:
+ * broad facets with gradients running across them, and the two ghosts of
+ * colour laid along the seams where the facets meet.
+ */
+export function pearl(): Maps {
+  const ck = 'pearl';
+  if (!cache.has(ck)) {
+    const face = sheet(512, 1024, (ctx, w, h) => {
+      ctx.fillStyle = '#eae8e3';
+      ctx.fillRect(0, 0, w, h);
+
+      /* Facets, as long wedges out of the corners. Each one a gradient along
+         its own axis, so the panel has somewhere for the light to break. */
+      const facets: Array<[number[], string, string, number]> = [
+        [[0, 0, 1, 0, 1, 0.42, 0, 0.24], '#ffffff', '#dcdad4', 0.85],
+        [[0, 0.24, 1, 0.42, 1, 0.74, 0, 0.58], '#f4f2ed', '#cfccc5', 0.7],
+        [[0, 0.58, 1, 0.74, 1, 1, 0, 1], '#ffffff', '#d6d3cc', 0.8],
+      ];
+      for (const [pts, from, to, alpha] of facets) {
+        const g = ctx.createLinearGradient(0, 0, w, h * 0.6);
+        g.addColorStop(0, from);
+        g.addColorStop(1, to);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(pts[0] * w, pts[1] * h);
+        for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i] * w, pts[i + 1] * h);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      // the two ghosts, along the seams: one warm, one cold, neither of them loud
+      ctx.filter = 'blur(9px)';
+      for (const [y, tint, a] of [[0.3, '#e8a79b', 0.5], [0.66, '#9fd4de', 0.42]] as [number, string, number][]) {
+        ctx.globalAlpha = a;
+        ctx.fillStyle = tint;
+        ctx.beginPath();
+        ctx.moveTo(0, h * y);
+        ctx.lineTo(w, h * (y + 0.11));
+        ctx.lineTo(w, h * (y + 0.14));
+        ctx.lineTo(0, h * (y + 0.03));
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+
+      // the flash, off to one side of where the camera goes
+      ctx.fillStyle = '#d9d6cf';
+      ctx.beginPath();
+      ctx.roundRect(w * 0.76, h * 0.075, 52, 52, 17);
+      ctx.fill();
+      ctx.fillStyle = '#f7f3e2';
+      ctx.beginPath();
+      ctx.arc(w * 0.76 + 26, h * 0.075 + 26, 16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(150,150,150,0.5)';
+      ctx.beginPath();
+      ctx.arc(w * 0.76 + 26, h * 0.075 + 26, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      // and the name, etched where a name goes
+      ctx.fillStyle = 'rgba(120,118,112,0.45)';
+      ctx.font = '600 26px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.letterSpacing = '3px';
+      ctx.fillText('fujiPhone', w / 2, h * 0.93);
+      ctx.letterSpacing = '0px';
+    });
+
+    cache.set(ck, clamped(tex(face, 1, true)));
+  }
+  return { map: cache.get(ck) };
+}
+
+/**
+ * The camera plateau, looked straight down on.
+ *
+ * Three wells, a knurled field and a number nobody believes. Painted rather
+ * than turned out of cylinders for the same reason the keys are painted: at
+ * the size a phone sits on a counter, a lens barrel is four pixels of rim
+ * around six of glass, and four pixels of rim drawn is sharper than four
+ * pixels of rim modelled — and costs a hundred and fifty vertices less.
+ */
+export function lenses(): Maps {
+  const ck = 'lenses';
+  if (!cache.has(ck)) {
+    const face = sheet(512, 512, (ctx, w, h) => {
+      ctx.fillStyle = '#e4e2dc';
+      ctx.fillRect(0, 0, w, h);
+
+      /* Knurling. Two sets of hairlines crossing at right angles is the whole
+         of it — machined diamonds are just what a lathe leaves behind. */
+      ctx.strokeStyle = 'rgba(120,118,112,0.3)';
+      ctx.lineWidth = 1;
+      for (let d = -w; d < w * 2; d += 7) {
+        ctx.beginPath();
+        ctx.moveTo(d, 0);
+        ctx.lineTo(d + h, h);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(d, h);
+        ctx.lineTo(d + h, 0);
+        ctx.stroke();
+      }
+
+      const lens = (cx: number, cy: number, r: number) => {
+        // the raised ring the glass is set into
+        const rim = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+        rim.addColorStop(0, '#ffffff');
+        rim.addColorStop(0.5, '#c9c6bf');
+        rim.addColorStop(1, '#f2efe9');
+        ctx.fillStyle = rim;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#121316';
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // the element, which is the only part of a camera anybody can see
+        const eye = ctx.createRadialGradient(cx - r * 0.16, cy - r * 0.18, r * 0.02, cx, cy, r * 0.42);
+        eye.addColorStop(0, '#8fb6d8');
+        eye.addColorStop(0.35, '#2c4a68');
+        eye.addColorStop(1, '#0a0d12');
+        ctx.fillStyle = eye;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.beginPath();
+        ctx.ellipse(cx - r * 0.22, cy - r * 0.26, r * 0.1, r * 0.06, -0.6, 0, Math.PI * 2);
+        ctx.fill();
+      };
+
+      /* The triangle they are always in, and big: on the thing itself the
+         glass is most of the plateau, and lenses drawn politely small read as
+         a camera from ten years ago. */
+      lens(166, 152, 128);
+      lens(356, 286, 112);
+      lens(176, 382, 120);
+
+      ctx.fillStyle = '#c0392b';
+      ctx.beginPath();
+      ctx.arc(322, 84, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#2f2e2b';
+      ctx.font = '800 32px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('100X', 336, 95);
+      ctx.fillStyle = 'rgba(70,68,64,0.65)';
+      ctx.font = '600 15px ui-sans-serif, system-ui, sans-serif';
+      ctx.letterSpacing = '2px';
+      ctx.fillText('FUJI LENS', 336, 118);
+      ctx.letterSpacing = '0px';
+    });
+
+    cache.set(ck, clamped(tex(face, 1, true)));
+  }
+  return { map: cache.get(ck) };
+}
+
 /** Everything above, dropped at once. */
 export function disposeTextures() {
   cache.forEach((t) => t.dispose());
