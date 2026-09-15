@@ -3,7 +3,7 @@ import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/Buffer
 import { COUNTER } from './layout';
 import { arc, foliage } from './parts';
 import { bakeLight, mergeStatic } from './bake';
-import { quality, texSize } from './quality';
+import { isHandheld, quality, texSize } from './quality';
 import type { PropPlacement } from '../lib/types';
 import { anodised, keyboard, NERO_KEYS, THINK_KEYS, lensGlass, lenses, oak, pearl, screen, softTouch, thinkDeck, thinkScreen, tinkerMark, weave } from './textures';
 import { onPhonePaint, phoneFinish } from './phoneFinishes';
@@ -997,6 +997,21 @@ let lastDrawn = -1;
 export const isDocked = () => docked;
 
 /**
+ * Where the handset is, as one sphere, kept up to date by `reseat`.
+ *
+ * Measured there rather than here because there is where it moves: the phone
+ * is put down, picked up, or snapped onto the stand, and nothing else in the
+ * room can change its bounds. Reading them per frame would mean walking the
+ * group and its world matrices sixty times a second to be told the same
+ * number, which is the shape of thing this whole file exists to avoid.
+ */
+const shot = new THREE.Frustum();
+const shotMatrix = new THREE.Matrix4();
+const handsetBounds = new THREE.Box3();
+const handsetSphere = new THREE.Sphere();
+let handsetPlaced = false;
+
+/**
  * Put the handset where it belongs: flat on the wood, or up on the stand.
  *
  * Two poses of one object, and the interesting one is the first. A phone left
@@ -1037,17 +1052,42 @@ function pose(handset: THREE.Group, stand: THREE.Group | undefined) {
  * and goes where the stand goes.
  */
 export function reseat(placed: readonly PlacedProp[], moving: string | null) {
-  const handset = placed.find((p) => p.def.id === 'phone');
+  const phone = placed.find((p) => p.def.id === 'phone');
   const stand = placed.find((p) => p.def.id === 'dock');
-  if (!handset) return;
+  if (!phone) return;
 
   if (moving === 'phone' && stand) {
-    const dx = handset.group.position.x - stand.group.position.x;
-    const dz = handset.group.position.z - stand.group.position.z;
+    const dx = phone.group.position.x - stand.group.position.x;
+    const dz = phone.group.position.z - stand.group.position.z;
     docked = Math.hypot(dx, dz) < DOCK.magnet;
   }
-  pose(handset.group, stand?.group);
+  pose(phone.group, stand?.group);
+
+  /* And where that leaves it, for the screen to check itself against. */
+  handsetBounds.setFromObject(phone.group);
+  handsetPlaced = !handsetBounds.isEmpty();
+  if (handsetPlaced) handsetBounds.getBoundingSphere(handsetSphere);
 }
+
+/**
+ * How often the charging screen is allowed to wake the room, in seconds.
+ *
+ * Because that is what it is doing. Redrawing the canvas is the small half of
+ * the cost; the large half is that a redrawn canvas is a reason to draw the
+ * whole room again — the sun, the shadow filter, the bloom pyramid, the
+ * composite — for a battery ring two centimetres across. Ten times a second,
+ * for as long as the phone is on the stand, whether or not anybody is looking
+ * at the room.
+ *
+ * On a desktop that is a rounding error on an idle machine. On a phone it is
+ * the room being drawn ten times a second while sitting still, and the part
+ * this matters most to is the part that gets slower the longer it is warm:
+ * heat spent on an idle room is speed taken from the next time somebody
+ * actually swings the camera. So a handheld gets four frames a second, which
+ * is still a ring that fills and a glow that breathes, and about a third of
+ * the heat.
+ */
+const SCREEN_INTERVAL = isHandheld() ? 0.26 : 0.1;
 
 /**
  * The one thing in either room that moves while nobody is touching it.
@@ -1055,11 +1095,20 @@ export function reseat(placed: readonly PlacedProp[], moving: string | null) {
  * Everything else here is drawn once and then costs nothing until the camera
  * moves, which is the property the whole scene is built on — so a screen that
  * animates is a deliberate hole in it, and it is kept as small as the hole can
- * be. Ten frames a second rather than sixty, nothing at all unless the phone
+ * be: a few frames a second rather than sixty, nothing at all unless the phone
  * is actually on the charger, and the moment it comes off the room goes quiet
  * again.
+ *
+ * And nothing at all unless it is in shot, which is the other half of the
+ * hole and the one that was left open. The phone stands on a counter at one
+ * end of the room; walk round to the board, or square on to the cork, and it
+ * is behind you — and it was still redrawing itself and still asking for the
+ * whole room to be drawn around it, at a cost per frame that has nothing to
+ * do with how much of the frame it occupies. Asking the camera first is four
+ * plane tests against a sphere, once per frame, and it turns the most common
+ * view in the app back into a still one.
  */
-export function animateProps(seconds: number): boolean {
+export function animateProps(seconds: number, camera?: THREE.Camera): boolean {
   if (!lit) return false;
   if (!docked) {
     // one last frame, to put it to sleep
@@ -1068,10 +1117,19 @@ export function animateProps(seconds: number): boolean {
     lit.draw(-1);
     return true;
   }
-  if (lastDrawn >= 0 && seconds - lastDrawn < 0.1) return false;
+  if (lastDrawn >= 0 && seconds - lastDrawn < SCREEN_INTERVAL) return false;
+  if (camera && !inShot(camera)) return false;
   lastDrawn = seconds;
   lit.draw(seconds);
   return true;
+}
+
+function inShot(camera: THREE.Camera): boolean {
+  if (!handsetPlaced) return true;
+  shot.setFromProjectionMatrix(
+    shotMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+  );
+  return shot.intersectsSphere(handsetSphere);
 }
 
 /**

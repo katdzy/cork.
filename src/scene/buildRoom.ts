@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CABINET, COUNTER, ROOM, WINDOW } from './layout';
-import { box, panel, pierced, still } from './parts';
+import { box, outdoors, panel, pierced, still } from './parts';
 import { brushed, oak, plaster } from './textures';
 
 /**
@@ -117,7 +117,7 @@ export function buildRoom(): THREE.Group {
   // the glass, sitting a little outside the wall, doing the lighting
   const sky = new THREE.Mesh(
     new THREE.PlaneGeometry(wD, wH),
-    new THREE.MeshBasicMaterial({ map: skyTexture(), toneMapped: false }),
+    outdoors(skyTexture()),
   );
   sky.rotation.y = -Math.PI / 2;
   sky.position.set(x + 90, wY, wZ);

@@ -52,6 +52,9 @@ export default function App() {
   const [opening, setOpening] = useState(needsOpening);
   const completeOpening = () => { finishOpening(); setOpening(false); startTour(); };
   const canvasRef = useRef<CanvasApi>(null);
+  useEffect(() => {
+    if (bootDone && opening) canvasRef.current?.prepareOpening();
+  }, [bootDone, opening]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pendingFocus, setPendingFocus] = useState<Memory | null>(null);

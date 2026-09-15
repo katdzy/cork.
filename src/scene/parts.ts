@@ -236,21 +236,32 @@ function glowTexture() {
 }
 
 /**
- * Bloom, faked.
+ * The bulb itself: not the spill, the filament.
  *
- * A real bloom pass means rendering the scene to a target, extracting the
- * bright parts, blurring them across several half-size buffers and compositing
- * back — five or six full-screen passes for an effect that, here, only ever
- * happens around two bulbs whose positions are known. Additive billboards at
- * those positions cost two draws and no passes at all, and because they are
- * excluded from tone mapping they keep the hot centre a real bloom would
- * flatten.
+ * This used to be the whole effect. A real bloom pass meant rendering the
+ * scene to a target, extracting the bright parts, blurring them across several
+ * half-size buffers and compositing back — five or six full-screen passes for
+ * something that, here, only ever happened around two bulbs whose positions
+ * were known in advance. Additive billboards at those positions cost two draws
+ * and no passes at all.
+ *
+ * There is a real pass now (see `post.ts`), and it changes what this is for
+ * rather than retiring it. The spill is measured off the frame now, so the
+ * halos no longer have to be drawn — but something in the frame has to be
+ * bright enough to spill in the first place, and a bulb drawn at white is not.
+ * So what is left is the hot centre, drawn at whatever multiple of white the
+ * tier's buffer can hold, and the pass finds it and does the rest. On a tier
+ * with no pass the multiple is one and the halos come back, because there is
+ * nothing else there to make one.
  */
 export function glowSprite(color: number, size: number, opacity: number) {
   const s = new THREE.Sprite(
     new THREE.SpriteMaterial({
       map: glowTexture(),
-      color,
+      /* Above white where there is somewhere above white to be. A sprite is
+         additive, so this is straightforwardly how much light it adds — and
+         anything over one is what the prefilter is looking for. */
+      color: new THREE.Color(color).multiplyScalar(quality().emissive),
       transparent: true,
       opacity,
       blending: THREE.AdditiveBlending,
@@ -268,10 +279,19 @@ export function glowSprite(color: number, size: number, opacity: number) {
   return s;
 }
 
-/** Two or three nested sprites: a hot core inside a wide, faint halo. */
+/**
+ * A hot core, and — only where nothing else will draw one — a halo around it.
+ *
+ * The two wide sprites are the expensive half: screen-sized, additive and
+ * depth-sorted, which is the overdraw a tiled GPU is worst at. Where the post
+ * chain is running they are also the redundant half, because it produces a
+ * better one from the core alone and produces it for every bright thing in the
+ * room rather than only for the ones somebody remembered to place a sprite on.
+ */
 export function bloom(color: number, core: number, halo: number, strength = 1): THREE.Group {
   const g = new THREE.Group();
   g.add(glowSprite(color, core, 0.95 * strength));
+  if (quality().post) return g;
   g.add(glowSprite(color, halo * 0.5, 0.4 * strength));
   g.add(glowSprite(color, halo, 0.18 * strength));
   return g;
@@ -307,7 +327,7 @@ export function lightCone(color: number, topR: number, bottomR: number, height: 
     new THREE.CylinderGeometry(topR, bottomR, height, 26, 1, true),
     new THREE.MeshBasicMaterial({
       map: coneFade,
-      color,
+      color: new THREE.Color(color).multiplyScalar(quality().airborne),
       transparent: true,
       opacity: 0.42 * strength,
       blending: THREE.AdditiveBlending,
@@ -316,6 +336,27 @@ export function lightCone(color: number, topR: number, bottomR: number, height: 
       toneMapped: false,
     }),
   );
+}
+
+/**
+ * The world outside a window, drawn at the brightness it actually has.
+ *
+ * Both rooms hang a picture behind their glass — a street in one, a city at
+ * dusk in the other — and both used to hang it unlit and untone-mapped, which
+ * put a ceiling of exactly white on the brightest object in the scene. That is
+ * the one thing a window is never as bright as.
+ *
+ * It is a single multiply, and it is the difference between glass and a poster
+ * of glass: the pane blows out, the reveal around it lifts, the spill runs
+ * along the sill, and every polished thing in the room suddenly has a window
+ * in it, because the probe captures this too.
+ */
+export function outdoors(map: THREE.Texture): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    map,
+    color: new THREE.Color(1, 1, 1).multiplyScalar(quality().daylight),
+    toneMapped: false,
+  });
 }
 
 /* ----------------------------------------------------------------- shafts */
@@ -372,7 +413,7 @@ function poolTexture() {
 function additive(map: THREE.Texture, color: number, opacity: number) {
   return new THREE.MeshBasicMaterial({
     map,
-    color,
+    color: new THREE.Color(color).multiplyScalar(quality().airborne),
     transparent: true,
     opacity,
     blending: THREE.AdditiveBlending,

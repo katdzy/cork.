@@ -44,6 +44,25 @@
     0 30px 50px -30px rgba(40, 24, 10, 0.45);
 
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /*
+     Which way is down, as far as a shadow is concerned.
+
+     A unit vector pointing away from whatever is lighting the room, plus the
+     same thing as an angle for the gradients that need one. The scene writes
+     all three onto the board element every time the camera moves — see
+     `publishLight` in `scene/useRoomScene.ts` — and they inherit from there
+     down through every memory on it.
+
+     Declared here rather than on the items themselves, because a declaration
+     on an item would beat the inherited one and the inheritance is the entire
+     mechanism. What is here is the fallback: straight down, which is what all
+     of this was hard-coded to before the room existed, and what a machine
+     with no WebGL still gets.
+  */
+  --cast-x: 0;
+  --cast-y: 1;
+  --cast-deg: 180deg;
 }
 
 * {
@@ -165,34 +184,151 @@ button {
 /* ============================================================
    Board items
    ============================================================ */
+/* Everything below reads `--cast-x` / `--cast-y` — the direction the room's
+   light is coming from, in screen pixels, kept up to date by the scene. See
+   the root block above. A photograph pinned to the cork therefore throws its
+   shadow the same way the mug on the counter below it does, and the whole
+   board swings together as you walk round the room. */
+
 /* Two blur passes, not three.
    These sit on a 3600×2400 layer that the browser re-rasterises whenever the
    camera changes the angle it is projected at — so during a fast zoom every
    `drop-shadow()` here is a blur of the whole board, every frame, once per
    item. Three passes across fourteen photographs is forty-two blurs a frame.
    A tight contact shadow and one soft ambient one carry the same weight; it
-   was the third, widest pass that cost the most and read the least. */
+   was the third, widest pass that cost the most and read the least.
+
+   The offsets are the direction above times a distance. The contact shadow
+   barely moves — a photograph is a millimetre off the cork and its near edge
+   is dark whatever the light is doing — while the ambient one swings the full
+   width of the vector, which is the difference the eye actually reads as a
+   light having moved. */
 .item-shadow {
-  filter: drop-shadow(0 1px 1px rgba(58, 34, 12, 0.3)) drop-shadow(0 9px 13px rgba(50, 29, 10, 0.3));
+  filter: drop-shadow(calc(var(--cast-x) * 1.4px) calc(var(--cast-y) * 1.4px) 1px rgba(58, 34, 12, 0.32))
+    drop-shadow(calc(var(--cast-x) * 11px) calc(var(--cast-y) * 11px) 13px rgba(50, 29, 10, 0.3));
 }
 
 .item-shadow-hover {
-  filter: drop-shadow(0 2px 2px rgba(58, 34, 12, 0.28)) drop-shadow(0 15px 20px rgba(50, 29, 10, 0.34));
+  filter: drop-shadow(calc(var(--cast-x) * 2.4px) calc(var(--cast-y) * 2.4px) 2px rgba(58, 34, 12, 0.28))
+    drop-shadow(calc(var(--cast-x) * 18px) calc(var(--cast-y) * 18px) 20px rgba(50, 29, 10, 0.34));
 }
 
 .item-shadow-drag {
-  filter: drop-shadow(0 5px 4px rgba(58, 34, 12, 0.22)) drop-shadow(0 30px 36px rgba(40, 22, 6, 0.42));
+  filter: drop-shadow(calc(var(--cast-x) * 5px) calc(var(--cast-y) * 5px) 4px rgba(58, 34, 12, 0.22))
+    drop-shadow(calc(var(--cast-x) * 34px) calc(var(--cast-y) * 34px) 36px rgba(40, 22, 6, 0.42));
 }
 
-/* While the camera is in flight, one small blur instead of two.
-   The wide, soft pass is the expensive half of a shadow and the half you
-   cannot see at all while the whole board is sweeping across the screen; it
-   comes back a seventh of a second after the camera lands. The class is
-   toggled twice per gesture, not once per frame. */
+/*
+   While the camera is in flight, no `filter` at all.
+
+   This used to cut the two blurs down to one, on the theory that the cost was
+   the blur. It is not, and measuring said so: dropping the second pass bought
+   about a sixth of the frame, and dropping `filter` altogether bought half of
+   it. The radius was never the expensive part — the *pass* is. A `filter` on
+   an element inside a 3D-transformed subtree forces the browser to rasterise
+   that element into a buffer of its own, blur the buffer, and composite the
+   result, and it has to do all three again every frame the projection changes.
+   Which, on a board being swung around a room, is every frame. Fourteen
+   photographs is fourteen offscreen round trips a frame, and the blur radius
+   barely moves the number.
+
+   A `box-shadow` is a paint. It goes into the layer the item is already being
+   drawn into, it costs what a gradient costs, and at a distance of three
+   millimetres and eight pixels of blur it is the same picture: paper standing
+   very slightly off cork. So the flight shadow is two box-shadows — the tight
+   contact and a soft ambient, the same pair the still state has — and the
+   still state's `drop-shadow` version comes back a seventh of a second after
+   the camera lands.
+
+   `box-shadow` follows the border box rather than the alpha silhouette, which
+   is the one thing it cannot do and the reason for the exception below. The
+   class is toggled twice per gesture, not once per frame.
+*/
 .board-moving .item-shadow,
 .board-moving .item-shadow-hover,
 .board-moving .item-shadow-drag {
-  filter: drop-shadow(0 2px 2px rgba(58, 34, 12, 0.34));
+  /*
+     And it happens at once, rather than over a quarter of a second.
+
+     Every item carries `transition: filter 240ms`, which is there for hover
+     and is wrong here: it turns one class toggle into fourteen animated
+     filters running for the first quarter-second of every gesture — which is
+     the quarter-second the camera is accelerating and the board is least able
+     to afford them. The whole point of the class is to stop paying for the
+     filter, and easing out of it is paying for it a bit longer at the worst
+     possible moment.
+
+     `!important` because the transition is set on the element itself, and an
+     inline declaration cannot otherwise be reached from here. Only the way
+     out is suppressed: coming back, the camera has already stopped, there is
+     nothing competing for the frame, and a shadow that eases back into place
+     is the difference between the board settling and the board flinching.
+  */
+  transition: none !important;
+  filter: none;
+  box-shadow:
+    calc(var(--cast-x) * 1.5px) calc(var(--cast-y) * 1.5px) 1px rgba(58, 34, 12, 0.3),
+    calc(var(--cast-x) * 6px) calc(var(--cast-y) * 6px) 9px -2px rgba(50, 29, 10, 0.34);
+}
+
+/*
+   Except where the paper is not a rectangle.
+
+   A torn notebook page, a ticket with its two punched notches, a scrapbook
+   sheet sitting inside a margin of nothing: for these the border box and the
+   thing you can see are different shapes, and a box-shadow draws the wrong
+   one — a straight edge where the eye expects a tear. They keep a blur, cut
+   to a single tight pass, which is what the whole board used to get. There
+   are never many of them on a board, and the ones that are there are small.
+*/
+.board-moving .item-irregular.item-shadow,
+.board-moving .item-irregular.item-shadow-hover,
+.board-moving .item-irregular.item-shadow-drag {
+  box-shadow: none;
+  filter: drop-shadow(calc(var(--cast-x) * 2.4px) calc(var(--cast-y) * 2.4px) 2px rgba(58, 34, 12, 0.34));
+}
+
+/*
+   Light falling across a print, running the way the room's light runs.
+
+   A photograph pinned to a wall is a slightly glossy sheet at a slight angle,
+   and what tells you so is a wash of the room's own light down one side of it
+   and the paper going slightly muddy on the other. This used to be a fixed
+   148-degree gradient, which is right in exactly one room seen from exactly
+   one place. Pointing it down `--cast-deg` costs the same paint and is right
+   from everywhere.
+
+   Kept very low in contrast on purpose: it is a sheen on paper, not a
+   highlight on glass, and anything you can point at has gone too far.
+*/
+.print-light {
+  background: linear-gradient(
+    var(--cast-deg),
+    rgba(255, 252, 244, 0.22) 0%,
+    rgba(255, 250, 238, 0.05) 32%,
+    rgba(60, 38, 16, 0.05) 74%,
+    rgba(52, 32, 12, 0.15) 100%
+  );
+}
+
+/*
+   And the dark seam where the item meets the cork.
+
+   The same thing the occlusion pass does for the room, done for the board by
+   the only means available to it: an inset shadow along the two edges the
+   light does not reach, which is what the gap under a pinned corner actually
+   looks like. It is an inset rather than a third `drop-shadow` because an
+   inset is a paint and a drop shadow is a blur of the whole board layer — see
+   above; the effect is worth having and a third blur pass is not.
+*/
+.item-contact {
+  box-shadow:
+    /* the seam itself, on the side the light does not reach */
+    inset calc(var(--cast-x) * 2.5px) calc(var(--cast-y) * 2.5px) 5px -3px rgba(46, 27, 10, 0.34),
+    /* and a hair of the room caught on the opposite edge */
+    inset calc(var(--cast-x) * -1px) calc(var(--cast-y) * -1px) 1.5px -1px rgba(255, 250, 238, 0.4),
+    /* the print's own cut edge, all the way round and independent of any of it */
+    inset 0 0 1px rgba(40, 24, 10, 0.5);
 }
 
 .no-select {
@@ -243,9 +379,9 @@ button {
 .startup-meter { width: min(280px, 80vw); height: 3px; background: #d9cdbb; overflow: hidden; border-radius: 4px; }
 .startup-meter > div { height: 100%; background: #a95740; transition: width .4s ease; }
 .startup-label { width: min(280px, 80vw); margin-top: 12px; font-size: 11px; color: #7f6b58; display: flex; justify-content: space-between; gap: 8px; }
-.opening { position: fixed; inset: 0; z-index: 80; color: #eee; background: #000; isolation: isolate; outline: none; }
+.opening { position: fixed; inset: 0; z-index: 80; color: #eee; background: transparent; isolation: isolate; outline: none; }
 .opening-scene, .opening-scene canvas, .opening-fallback { position: absolute; inset: 0; width: 100%; height: 100%; }
-.opening-cinema { --letterbox: clamp(18px, 4.4vh, 40px); }
+.opening-cinema { --letterbox: calc(clamp(18px, 4.4vh, 40px) * var(--letterbox-scale, 1)); }
 .opening-cinema .opening-scene { top: var(--letterbox); bottom: var(--letterbox); height: calc(100% - var(--letterbox) * 2); }
 .opening-vignette { position: absolute; inset: var(--letterbox) 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 48%, rgba(12, 10, 8, .15) 100%); }
 .opening-letterbox { position: absolute; left: 0; right: 0; height: var(--letterbox); background: #000; z-index: 3; pointer-events: none; }
@@ -267,3 +403,7 @@ button {
   padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
 }
 .settings-content { touch-action: pan-y; scrollbar-gutter: stable; }
+
+.opening-welcome { position: absolute; z-index: 4; left: 20px; right: 20px; top: 15%; margin: 0; text-align: center; font-size: clamp(32px, 5vw, 72px); font-weight: 600; letter-spacing: -.055em; line-height: 1.15; color: #fff7e9; text-shadow: 0 2px 24px #30241499, 0 1px 3px #30241466; opacity: 0; transform: translateY(10px); transition: opacity 900ms ease, transform 900ms ease; pointer-events: none; }
+.opening-welcome.is-visible { opacity: 1; transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) { .opening-welcome { transition: none; transform: none; } }

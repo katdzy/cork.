@@ -4,14 +4,20 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { buildRoom } from './buildRoom';
 import { buildCorkboard } from './buildFittings';
 import { kitchenLight, SCENES, disposeScene } from './themes';
-import { BOARD } from './layout';
+import { BOARD, WINDOW } from './layout';
 import { box, still } from './parts';
 import { concrete, plaster } from './textures';
 import { quality } from './quality';
+import { createPost } from './post';
+import { installSoftShadows, lightWidth } from './softShadows';
 import { bakeLight, mergeStatic } from './bake';
-import { OPENING } from './openingTiming';
+import { OPENING, PLACEMENT } from './openingTiming';
 import { buildOpeningHands } from './openingHands';
+import { openingMotion } from './openingMotion';
 import { buildRubbish } from './rubbish';
+
+/** The alley: overcast, unheated, and nobody's idea of anywhere. */
+const STREET_GRADE = { contrast: 1.0, saturation: 0.9, split: 0.4, shade: 0x7c8086, glow: 0x83817d, vignette: 0.22 };
 
 const ease = (t: number) => { const p = THREE.MathUtils.clamp(t, 0, 1); return p * p * p * (p * (p * 6 - 15) + 10); };
 const mix = THREE.MathUtils.lerp;
@@ -21,14 +27,45 @@ const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
  * Shared room maps are borrowed; only opening-owned resources are disposed. */
 export function createOpening(host: HTMLElement) {
   const q = quality();
-  const renderer = new THREE.WebGLRenderer({ antialias: q.antialias, powerPreference: q.powerPreference });
+  // antialias off where the post chain owns the samples instead — see `post.ts`
+  const renderer = new THREE.WebGLRenderer({ antialias: q.antialias && !q.post, powerPreference: q.powerPreference });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = q.shadowType;
+  renderer.shadowMap.type = installSoftShadows();
   host.appendChild(renderer.domElement);
+  /*
+   * The prologue gets the same lens the room does, and wants it more.
+   *
+   * This is the one part of the app that is unambiguously a shot rather than
+   * an interface: a held camera, a walk in from the street, a doorway
+   * several stops brighter than the hall behind it. Every one of those is a
+   * situation where a real lens does something visible and a clipped buffer
+   * does nothing at all — the doorway simply goes white and stays white.
+   */
+  const post = createPost(renderer);
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(54, 1, 25, 70000);
+  /*
+   * Near and far, chosen the way the room's are — for depth precision.
+   *
+   * This opened at twenty-five and seventy thousand, a ratio of two thousand
+   * eight hundred. A depth buffer spends almost all of its resolution close to
+   * the camera, and what is left out where the scene actually is falls off
+   * with that ratio; `useRoomScene` had already found that six hundred and
+   * sixty-seven was enough to leave drawer faces fighting each other for the
+   * same depth value. Four times worse, over a pavement thirty-five metres
+   * long seen almost edge-on, put the fight across the whole ground: even
+   * bands of it, closing up towards the horizon, wherever two triangles
+   * rounded to the same number.
+   *
+   * Five hundred is as far out as the near plane can go here. Unlike the room
+   * camera, which is leashed away from everything, this one is a person's eye
+   * with their own arms attached to it — the shoulders sit *behind* it and the
+   * upper arms only come into shot about sixteen hundred units out, so there
+   * is room to push the plane to five hundred and none at all to push it to
+   * two thousand. That still buys a factor of twenty.
+   */
+  const camera = new THREE.PerspectiveCamera(54, 1, 500, 70000);
   const street = new THREE.Group(); street.name = 'outside';
   const home = new THREE.Group(); home.name = 'kitchen-without-props';
   const shell = buildRoom();
@@ -40,10 +77,11 @@ export function createOpening(host: HTMLElement) {
 
   const material = (color: number, roughness = 0.9, maps = {}) => new THREE.MeshStandardMaterial({ color, roughness, ...maps });
   const masonry = material(0x999c91, 0.97, plaster());
-  const pavement = material(0xfbfbf6, 0.93, concrete());
+  // poured flat and walked on: no shuttering, so none of a wall's marks
+  const pavement = material(0xfbfbf6, 0.93, concrete(false));
   street.add(box(28000, 180, 35000, pavement, 0, -120, 11000));
   street.add(box(26000, 10000, 300, masonry, 0, 4800, -1300));
-  street.add(box(26000, 180, 740, material(0xe6e8de, 0.95, concrete()), 0, 0, -900));
+  street.add(box(26000, 180, 740, material(0xe6e8de, 0.95, concrete(false)), 0, 0, -900));
   /* Recessed masonry joints, drain pipe, and a weathered service door.
      Two hundred joints is two hundred draw calls for two thousand triangles,
      which is the wrong way round on a phone; they never move relative to each
@@ -67,6 +105,11 @@ export function createOpening(host: HTMLElement) {
   daylight.castShadow = true; daylight.shadow.mapSize.setScalar(q.sunShadow);
   Object.assign(daylight.shadow.camera, { left: -10000, right: 10000, top: 11000, bottom: -7000, near: 100, far: 35000 });
   daylight.shadow.camera.updateProjectionMatrix(); daylight.shadow.normalBias = 15; daylight.shadow.bias = -0.0002;
+  /* Wider than either room's sun: this one is outdoors, where half the light
+     arriving on a bin bag has come off the sky and the wall behind it rather
+     than straight from overhead. Softer shadows on the rubbish is most of what
+     makes the pile read as rubbish rather than as a heap of boxes. */
+  lightWidth(daylight.shadow, 300);
   street.add(daylight, daylight.target, new THREE.HemisphereLight(0xdce6ef, 0x80745e, 1.1));
 
   const limbs = buildOpeningHands();
@@ -95,6 +138,12 @@ export function createOpening(host: HTMLElement) {
     mergeStatic(shell); captureKitchen(); render(seconds);
   } });
 
+  /* The sun, put where a sun is: far enough away along the light's own
+     direction that it reads as being in the sky rather than in the street. */
+  const outdoorScatter = daylight.target.position.clone()
+    .addScaledVector(daylight.position.clone().sub(daylight.target.position).normalize(), 46000);
+  const indoorScatter = v(WINDOW.x - 300, (WINDOW.bottom + WINDOW.top) / 2 + 400, (WINDOW.near + WINDOW.far) / 2);
+
   const groundBoard = v(0, 1300, 400);
   const carriedBoard = new THREE.Vector3();
 
@@ -122,8 +171,8 @@ export function createOpening(host: HTMLElement) {
   function bodyAt(time: number, mobile: boolean, out: Body) {
     if (time < OPENING.home) {
       const approach = ease((time - 0.6) / 5.4);
-      const crouch = ease((time - 6) / 2.4);
-      const stand = ease((time - 9) / 2.5);
+      const crouch = ease((time - 6) / 1.8);
+      const stand = ease((time - 8.8) / 1.85);
       const walk = ease((time - 12) / 4);
       const moving = Math.sin(approach * Math.PI) * (1 - crouch) + Math.sin(walk * Math.PI);
       const bob = Math.sin(time * 4.4) * 9 * moving;
@@ -137,20 +186,34 @@ export function createOpening(host: HTMLElement) {
         mix(3000, 1750, ease((time - 1) / 4)) + stand * 1800,
         300 + walk * 600,
       );
+      // Notice the discarded board, look along its edge, then commit to
+      // the pickup. The eyes lead the crouch instead of moving in lockstep.
+      const notice = ease((time - 3.1) / 0.45) * (1 - ease((time - 5.6) / 0.6));
+      out.look.x += notice * mix(-260, 150, ease((time - 4.3) / 0.65));
+      out.look.y += notice * 110;
       out.moving = moving;
       out.stand = stand;
       return out;
     }
     const enter = ease((time - 16) / 2.4);
-    const hang = ease((time - 18.5) / 3.5);
-    const stepBack = ease((time - 23.3) / 3.7);
-    const moving = Math.sin(enter * Math.PI);
+    const lift = ease((time - PLACEMENT.lift) / 0.95);
+    const check = ease((time - PLACEMENT.inspect) / 0.35)
+      * (1 - ease((time - PLACEMENT.press) / 0.65));
+    const glance = mix(-380, 340, ease((time - PLACEMENT.align) / 0.5)) * check;
+    const lean = ease((time - PLACEMENT.press + 0.2) / 0.65)
+      * (1 - ease((time - PLACEMENT.release) / 0.6));
+    const stepBack = ease((time - PLACEMENT.stepBack) / (PLACEMENT.cameraHome - PLACEMENT.stepBack));
+    const moving = Math.sin(enter * Math.PI) + Math.sin(stepBack * Math.PI) * 0.75;
     out.eye.set(
       mix(400, BOARD.centreX, enter),
       5050 + Math.sin(time * 4.4) * 7 * moving,
-      mix(8600, mobile ? 6400 : 4200, enter),
+      mix(8600, mobile ? 6400 : 4200, enter) - lean * 240,
     );
-    out.look.set(mix(-200, BOARD.centreX, enter), mix(4000, BOARD.centreY - 300, hang), BOARD.z);
+    out.look.set(
+      mix(-200, BOARD.centreX, enter) + glance,
+      mix(4000, BOARD.centreY - 100, lift) + check * 220,
+      BOARD.z,
+    );
     const framing = SCENES.kitchen.framing(camera.aspect);
     const finalTarget = v(...framing.target);
     const finalEye = finalTarget.clone().add(v(
@@ -158,7 +221,6 @@ export function createOpening(host: HTMLElement) {
       framing.radius * Math.cos(framing.phi),
       framing.radius * Math.sin(framing.phi) * Math.cos(framing.theta),
     ));
-    finalEye.y = 4950;
     out.eye.lerp(finalEye, stepBack);
     out.look.lerp(finalTarget, stepBack);
     out.moving = moving;
@@ -173,7 +235,8 @@ export function createOpening(host: HTMLElement) {
     seconds = time;
     const indoors = time >= OPENING.home;
     const mobile = camera.aspect < 0.8;
-    camera.fov = mobile ? 78 : 54;
+    camera.fov = mix(mobile ? 78 : 54, SCENES.kitchen.framing(camera.aspect).fov,
+      ease((time - PLACEMENT.stepBack) / (PLACEMENT.cameraHome - PLACEMENT.stepBack)));
     home.visible = indoors; street.visible = !indoors;
     scene.background = new THREE.Color(indoors ? SCENES.kitchen.background : 0xb7b9ac);
     scene.environment = indoors ? indoorEnvironment!.texture : outdoorEnvironment.texture;
@@ -181,15 +244,28 @@ export function createOpening(host: HTMLElement) {
     renderer.toneMappingExposure = indoors ? SCENES.kitchen.exposure : 0.92;
 
     bodyAt(time, mobile, now);
-    bodyAt(time - 0.11, mobile, before);
+    bodyAt(time - 0.16, mobile, before);
     camera.position.copy(now.eye);
     camera.lookAt(now.look);
-    camera.rotateZ(Math.sin(time * 2.2) * 0.0015 * now.moving);
+    // Keep the arm solver on the torso basis. The head moves independently
+    // above it, so a footfall does not shake the hands and view as one object.
+    camera.updateMatrixWorld();
+    right.setFromMatrixColumn(camera.matrixWorld, 0);
+    upward.setFromMatrixColumn(camera.matrixWorld, 1);
+    ahead.setFromMatrixColumn(camera.matrixWorld, 2).negate();
+    const head = openingMotion(time, now.moving);
+    const settleView = 1 - ease((time - 26) / 1);
+    camera.position.addScaledVector(right, head.x * settleView)
+      .addScaledVector(upward, head.y * settleView)
+      .addScaledVector(ahead, head.z * settleView);
+    camera.rotateX(head.pitch * settleView);
+    camera.rotateY(head.yaw * settleView);
+    camera.rotateZ(head.roll * settleView);
 
-    const reach = ease((time - 6.5) / 1.4);
-    const release = ease((time - 22) / 1.7);
-    const grip = ease((time - 7.3) / 1.5) * (1 - release);
-    const hanging = ease((time - 18.5) / 3.5);
+    // Pass linear phase to the rig, which eases each hand separately.
+    const reach = THREE.MathUtils.clamp((time - 6.55) / 0.85, 0, 1);
+    const release = THREE.MathUtils.clamp((time - PLACEMENT.release) / 2.0, 0, 1);
+    const grip = THREE.MathUtils.clamp((time - 7.4) / 1.1, 0, 1);
 
     /* The board: on the ground, then in front of the body it was lifted by,
        then on the wall. It is placed from where the body was a moment ago, so
@@ -206,25 +282,83 @@ export function createOpening(host: HTMLElement) {
         mix(0.05, 0, now.stand),
         mix(-0.065, 0.012 * Math.sin(time * 2) * now.moving, now.stand),
       );
+      // Lift, pause to inspect one edge, then tip the other way before
+      // carrying on. Unequal beats keep the gesture from reading as a loop.
+      const inspect = ease((time - 10.5) / 0.55) * (1 - ease((time - 12.6) / 0.7));
+      const turn = ease((time - 11.55) / 0.65);
+      board.rotation.x += inspect * mix(0.21, -0.145, turn);
+      board.rotation.y += inspect * mix(-0.25, 0.19, turn);
+      board.rotation.z += inspect * mix(-0.085, 0.055, turn);
+      board.position.y += inspect * 130;
+      // The weight dips once as the lift stops, then settles into a slower
+      // carrying sway below the quicker motion of the head.
+      const load = ease((time - 10.1) / 0.22) * (1 - ease((time - 10.55) / 0.5));
+      board.position.y -= load * 70;
+      board.rotation.z += Math.sin(time * Math.PI * 1.8 - 0.8) * 0.012 * now.moving * now.stand;
     } else {
-      board.position.copy(carriedBoard).lerp(v(BOARD.centreX, BOARD.centreY, BOARD.z), hanging);
-      board.rotation.set(-0.2 * (1 - hanging), 0, 0.02 * (1 - hanging));
+      // Raise the board first, pause to sight the top edge, then reach toward
+      // the wall. The right side leads slightly before the left levels it.
+      const lift = ease((time - PLACEMENT.lift) / 0.95);
+      const extend = ease((time - PLACEMENT.inspect) / 0.8);
+      const correct = ease((time - PLACEMENT.align) / 0.6);
+      const press = ease((time - PLACEMENT.press) / 0.7);
+      const lower = ease((time - PLACEMENT.lower) / 0.45);
+      const seat = ease((time - PLACEMENT.seat) / 0.65);
+      const effort = lift * (1 - press);
+      board.position.set(
+        mix(carriedBoard.x, BOARD.centreX + 100 * (1 - correct), lift),
+        mix(carriedBoard.y, BOARD.centreY + 185, lift) - lower * 185,
+        mix(carriedBoard.z, BOARD.z + 430, extend) - press * 170 - seat * 260,
+      );
+      board.rotation.set(
+        mix(-0.2, -0.095, lift) * (1 - press),
+        mix(-0.07, 0.027, correct) * effort * (1 - press),
+        mix(0.02, -0.055, lift) * (1 - correct),
+      );
+      // Keep the back corners clear while the board is tilted. Leave room
+      // for supporting fingers until they peel away, then seat it flush.
+      board.updateMatrix();
+      const e = board.matrix.elements;
+      const rearExtent = Math.abs(e[2]) * (BOARD.width / 2 + 96)
+        + Math.abs(e[6]) * (BOARD.height / 2 + 96) + 50;
+      board.position.z = Math.max(board.position.z, rearExtent + 12);
+      // Brief pressure tremor dies out before the board is on its mounting.
+      const tension = Math.sin(time * 16.1) * 3.6 * effort;
+      board.position.y += tension;
+
     }
 
-    limbs.show(time > 6.2 && time < 24.4);
+    limbs.show(reach > 0 && release < 1);
     if (limbs.arms.visible) {
-      camera.updateMatrixWorld();
-      right.setFromMatrixColumn(camera.matrixWorld, 0);
-      upward.setFromMatrixColumn(camera.matrixWorld, 1);
-      ahead.setFromMatrixColumn(camera.matrixWorld, 2).negate();
       limbs.pose({
-        board, eye: camera.position, right, up: upward, forward: ahead,
+        board, eye: now.eye, right, up: upward, forward: ahead,
         reach, grip, release, time, moving: now.moving,
       });
     }
 
     camera.updateProjectionMatrix();
-    renderer.render(scene, camera);
+    /*
+     * Where the light is coming from, which changes halfway through.
+     *
+     * Outside it is the sun over the roofline; inside it is the kitchen
+     * window, which is the only bright thing in the room and the thing the
+     * whole shot is walking toward. Handing the pass a point rather than a
+     * direction is what lets it keep working as the body turns: it projects
+     * the point each frame and fades the scattering out as it leaves the
+     * frame, so the bands swing with the walk instead of sitting still.
+     */
+    post.setSource(indoors ? indoorScatter : outdoorScatter, indoors ? 0xffe9c6 : 0xfff0d2);
+    /*
+     * And the grade, which changes at the same moment and for the same
+     * reason. Outside is an overcast afternoon in a service alley: flat,
+     * grey-green, nothing warm in it anywhere. Inside is the kitchen's own
+     * grade, which is the whole of what the walk is towards — the shot is
+     * about arriving somewhere warmer than where it started, and the two
+     * grades are how that lands before anything else in the frame has had a
+     * chance to say so.
+     */
+    post.setGrade(indoors ? SCENES.kitchen.grade : STREET_GRADE);
+    post.render(scene, camera);
   }
   const resize = () => {
     const width = host.clientWidth; const height = Math.max(1, host.clientHeight);
@@ -244,7 +378,7 @@ export function createOpening(host: HTMLElement) {
       });
       scene.traverse((o) => { if (o instanceof THREE.Light && 'shadow' in o) (o as THREE.DirectionalLight).shadow.dispose(); });
       disposeScene(street); disposeScene(home); disposeScene(board); disposeScene(limbs.arms);
-      outdoorEnvironment.dispose(); indoorEnvironment?.dispose(); pmrem.dispose(); renderer.dispose(); renderer.domElement.remove();
+      outdoorEnvironment.dispose(); indoorEnvironment?.dispose(); pmrem.dispose(); post.dispose(); renderer.dispose(); renderer.domElement.remove();
     },
   };
 }

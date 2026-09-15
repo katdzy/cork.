@@ -3,48 +3,27 @@ import { BOARD } from './layout';
 import { arc } from './parts';
 import { fabric } from './textures';
 
-/**
- * The pair of arms carrying the board.
- *
- * What this replaced was two tapered tubes drawn from the rail to a fixed
- * point a metre in front of the camera, welded into the board's own group.
- * Two things gave it away. The far end of each tube was an elbow that
- * stopped, in mid-air, inside the frame — arms do not end, they leave the
- * shot. And nothing about them ever changed: a rigid pair of shapes carried
- * by the board's matrix reads as part of the board, which is the whole of the
- * robot feeling.
- *
- * So the arms are solved here rather than posed. The hands belong to the
- * board, because that is what gripping something means; the shoulders belong
- * to the body, which in a first-person shot is the camera; and the elbow is
- * whatever has to be true between the two, found each frame by the oldest
- * trick in animation — two bones, a chord, and a pole vector to say which way
- * the joint breaks. The body then breathes and walks and the elbows open and
- * close because of it, without a keyframe anywhere saying they should.
- *
- * Bone lengths follow the chord instead of fixing it. The board is held
- * further out than an arm can reach — it has to be, or it would not fit in
- * the shot — and an honest twenty-seven centimetre forearm would simply fail
- * to arrive. Scaling the pair keeps the proportion, the bend and the
- * silhouette, and gives up only a measurement nobody in a moving shot can
- * take.
- */
+/** Articulated carrying arms. Hands lock to the rail while loaded; free hands
+ * follow a camera-relative path through the lower edge of the frame. The elbow
+ * pole stays below and outside the wrist, with a softer bend during reaching. */
 
 /** The outer face of the frame, which is what a hand closes around. */
 const RAIL = BOARD.width / 2 + 96;
 /** Half the thickness of a palm: how far off the rail the wrist rides. */
-const PALM = 79;
+const PALM = 92;
 /** Where the grip lands: below the middle of the rail, the way a lift does. */
 const GRIP_Y = -210;
 /** And how far forward of the frame, leaving the fingers room behind it. */
-const GRIP_Z = 300;
+const GRIP_Z = 276;
 
-/** Open, and shut around a rail three centimetres thick. */
+/** The rail occupies z = -24…64. Keep finger pads behind its back face,
+ * with a shallow distal curl rather than a fist that returns into the wood.
+ * The opposing thumb is built separately above the front face. */
 const OPEN: [number, number, number] = [0.15, 0.3, 0.2];
-const SHUT: [number, number, number] = [1.42, 1.5, 0.78];
+const SHUT: [number, number, number] = [1.3, 0.35, 0.12];
 
 const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
-const ease = (t: number) => { const p = THREE.MathUtils.clamp(t, 0, 1); return p * p * (3 - 2 * p); };
+const ease = (t: number) => { const p = THREE.MathUtils.clamp(t, 0, 1); return p * p * p * (p * (p * 6 - 15) + 10); };
 
 export interface ArmPose {
   board: THREE.Object3D;
@@ -55,7 +34,7 @@ export interface ArmPose {
   forward: THREE.Vector3;
   /** 0 while the hands are still out of shot, 1 once they are on the rails. */
   reach: number;
-  /** 0 open, 1 closed. */
+  /** Pickup phase, 0 approaching contact, 1 carrying. Release is separate. */
   grip: number;
   /** 0 holding, 1 let go and gone. */
   release: number;
@@ -69,6 +48,7 @@ export function buildOpeningHands() {
   const hands = new THREE.Group();
   /** World-space, because an arm is part of the body at the other end. */
   const arms = new THREE.Group();
+  hands.visible = arms.visible = false;
 
   const skin = new THREE.MeshPhysicalMaterial({
     color: 0x9d7b60, roughness: 0.72, sheen: 0.22,
@@ -143,7 +123,7 @@ export function buildOpeningHands() {
       // +1 is the wrist end, -1 the knuckles: narrow and deep becoming broad
       // and flat, which is the whole difference between a hand and a mitten.
       const y = position.getY(i);
-      position.setXYZ(i, position.getX(i) * (68 - 8 * y), y * 172, position.getZ(i) * (120 - 22 * y));
+      position.setXYZ(i, position.getX(i) * (82 - 12 * y), y * 162, position.getZ(i) * (128 - 20 * y));
     }
     geometry.computeVertexNormals();
     return geometry;
@@ -173,10 +153,8 @@ export function buildOpeningHands() {
     back.rotation.x = Math.PI / 2;
     back.castShadow = back.receiveShadow = true;
     hand.add(back);
-    // Tendons, in skin rather than in shadow: form, not drawing.
-    for (let i = 0; i < 3; i++) {
-      bone(hand, v(side * 30, 76 - i * 58, -110), v(side * 26, 88 - i * 66, -290), 13, 1, skin);
-    }
+    // A soft thumb pad merges the palm into the opposing thumb.
+    oval(hand, v(side * -24, 65, -125), v(66, 78, 104), skin);
 
     const fingers: Joint[][] = [];
     const spread = [112, 38, -36, -112];
@@ -185,7 +163,7 @@ export function buildOpeningHands() {
       head.scale.multiplyScalar(i === 3 ? 0.86 : 1);
     }
     const reach = [0.98, 1.06, 1, 0.84];
-    const thick = [33, 34, 31, 26];
+    const thick = [37, 39, 36, 30];
     for (let i = 0; i < 4; i++) {
       const length = reach[i];
       const radius = thick[i];
@@ -210,7 +188,7 @@ export function buildOpeningHands() {
           const plate = oval(joint, v(side * r * 0.66, 0, -len * 0.54), v(5, r * 0.42, r * 0.6), nail);
           plate.rotation.z = side * 0.3;
         }
-        chain.push({ object: joint, rest: OPEN[j] * (1 + i * 0.05), shut: SHUT[j] * (1 + i * 0.03) });
+        chain.push({ object: joint, rest: OPEN[j] * (1 + i * 0.05), shut: SHUT[j] });
         parent = joint;
       }
       fingers.push(chain);
@@ -221,12 +199,12 @@ export function buildOpeningHands() {
     const root = new THREE.Group();
     root.position.set(side * 14, 46, -110);
     hand.add(root);
-    bone(root, v(0, 0, 0), v(side * -52, 116, -86), 44, 0.9, skin);
+    bone(root, v(0, 0, 0), v(side * -52, 116, -38), 44, 0.9, skin);
     const tip = new THREE.Group();
-    tip.position.set(side * -52, 116, -86);
+    tip.position.set(side * -52, 116, -38);
     root.add(tip);
-    bone(tip, v(0, 0, 0), v(side * -80, 60, -34), 35, 0.9, skin);
-    const thumbNail = oval(tip, v(side * -52, 40, -8), v(5, 23, 18), nail);
+    bone(tip, v(0, 0, 0), v(side * -80, 60, -12), 35, 0.9, skin);
+    const thumbNail = oval(tip, v(side * -52, 40, 12), v(5, 23, 18), nail);
     thumbNail.rotation.z = side * 0.9;
     const thumb: Joint[] = [
       { object: root, rest: -0.3, shut: 0.4 },
@@ -235,21 +213,21 @@ export function buildOpeningHands() {
 
     /* -- and the arm itself, which lives out in the world -------------- */
     const fore = new THREE.Mesh(sleeveGeometry([
-      [0, 0], [92, 0.003], [112, 0.012], [118, 0.028], [100, 0.044],
-      [124, 0.08], [148, 0.16], [166, 0.34], [178, 0.62], [186, 1],
+      [0, 0], [126, 0.003], [143, 0.012], [146, 0.028], [134, 0.044],
+      [155, 0.08], [190, 0.22], [224, 0.48], [234, 0.72], [218, 1],
     ]), sleeve);
     const upper = new THREE.Mesh(sleeveGeometry([
-      [0, 0], [186, 0.004], [206, 0.16], [230, 0.5], [242, 0.86], [232, 1],
+      [0, 0], [218, 0.004], [248, 0.16], [286, 0.5], [304, 0.86], [292, 1],
     ]), sleeve);
     /* Wrist to cuff: narrow, a little flattened, and swelling into the arm.
        Fixed in length rather than stretched with the bone, because it is the
        one part of the arm whose real size the eye knows. */
     const bare = new THREE.Mesh(sleeveGeometry([
-      [0, 0], [66, 0.02], [70, 0.16], [76, 0.42], [86, 0.72], [96, 1],
+      [0, 0], [78, 0.02], [85, 0.16], [99, 0.42], [117, 0.72], [136, 1],
     ]), skin);
-    bare.scale.x = 0.82;
-    const hem = new THREE.Mesh(new THREE.TorusGeometry(108, 17, 6, arc(20)), cuff);
-    const elbow = new THREE.Mesh(new THREE.SphereGeometry(190, arc(14), arc(10)), sleeve);
+    bare.scale.x = 0.9;
+    const hem = new THREE.Mesh(new THREE.TorusGeometry(138, 16, 6, arc(20)), cuff);
+    const elbow = new THREE.Mesh(new THREE.SphereGeometry(224, arc(14), arc(10)), sleeve);
     for (const piece of [bare, fore, upper, hem, elbow]) {
       piece.castShadow = piece.receiveShadow = true;
       arms.add(piece);
@@ -266,6 +244,10 @@ export function buildOpeningHands() {
   const axis = new THREE.Vector3();
   const pole = new THREE.Vector3();
   const basis = new THREE.Matrix4();
+  const railAt = new THREE.Vector3();
+  const restAt = new THREE.Vector3();
+  const handAt = new THREE.Vector3();
+  const bareEnd = new THREE.Vector3();
 
   /** Point a bone at something, rolled so that `up` is up. */
   function aim(mesh: THREE.Mesh, from: THREE.Vector3, to: THREE.Vector3, up: THREE.Vector3) {
@@ -283,47 +265,78 @@ export function buildOpeningHands() {
       board.updateMatrixWorld();
       for (const limb of limbs) {
         const { side } = limb;
-        /* Two hands never do the same thing at the same instant. A tenth of a
-           second between them is not something anybody will notice happening,
-           and is most of why the pair stops looking like one mechanism. */
-        const lead = side > 0 ? 0.12 : 0;
-        const shut = ease((grip - lead) / 0.88);
-        const gone = ease((release - lead) / 0.88);
+        // The right hand finds the edge first and releases first. The left
+        // supports the load for another beat before following it away.
+        const dominant = side > 0;
+        const lead = dominant ? 0 : 0.3;
+        const gone = ease((release - (dominant ? 0.28 : 0.44)) / (dominant ? 0.58 : 0.56));
         const held = 1 - gone;
-        const away = 1 - ease((reach - lead) / 0.88);
+        const away = 1 - ease((reach - lead) / (dominant ? 0.65 : 0.7));
+        const contact = grip - (dominant ? 0 : 0.26);
+        const letGo = release - (dominant ? 0 : 0.16);
 
-        /* The hand: on the rail, or on its way to it — in from below and
-           outside, which is where a hand comes from when you crouch to pick
-           something up off the ground, and where it goes when it lets go. */
-        limb.hand.position.set(
-          side * (RAIL + PALM + away * 170 + gone * 520),
-          GRIP_Y - away * 760 - gone * 560,
-          GRIP_Z + away * 460 + gone * 760,
-        );
-        /* A wrist is never quite straight, and a loaded one gives a little on
-           every step. The last term is far too small to see and is doing its
-           work anyway: nothing alive is ever perfectly still. */
-        const settle = Math.sin(time * 4.4 - 1) * 0.022 * moving * held
-          + Math.sin(time * 1.2 + side * 2) * 0.01 * held;
-        const on = 1 - away;
+        // The resting wrist is below the camera frustum, with the shoulder
+        // behind it. Visibility changes only at this fully tucked pose.
+        restAt.copy(eye).addScaledVector(right, side * 740)
+          .addScaledVector(up, -1700).addScaledVector(forward, 180);
+        railAt.set(side * (RAIL + PALM), GRIP_Y, GRIP_Z);
+        board.localToWorld(railAt);
+        const travel = 1 - away;
+        handAt.copy(restAt).lerp(railAt, travel);
+        handAt.addScaledVector(right, side * Math.sin(travel * Math.PI) * 1100)
+          .addScaledVector(up, -Math.sin(travel * Math.PI) * 180);
+        // Clear the rail before folding the forearm down toward the body.
+        handAt.addScaledVector(right, side * Math.sin(gone * Math.PI) * 1400)
+          .addScaledVector(forward, -Math.sin(gone * Math.PI) * 360);
+        handAt.lerp(restAt, gone);
+        limb.hand.position.copy(board.worldToLocal(handAt));
+        // A loaded palm stays fixed against the wood. Let the arm absorb
+        // walking motion; rotating the gripping hand pushes fingers through
+        // the rail. Only free wrists turn during approach and withdrawal.
+        const free = Math.max(away, gone);
         limb.hand.rotation.set(
-          -0.14 * on + settle + Math.sin(time * 1.7 + side) * 0.007,
-          side * (0.22 - 0.14 * on + gone * 0.5),
-          side * (0.18 * on - settle * 1.8 + gone * 0.42),
+          -0.12 * free,
+          side * (0.22 * away + gone * 0.5),
+          side * (0.16 * away + gone * 0.42),
         );
 
-        // Fingers shut one after another, index first, the way a hand shuts.
+        // Middle and ring fingers take the load, the index adjusts, and the
+        // little finger follows. Each joint has its own travel time. On release
+        // the fingertips peel away before the knuckles; it is not a reversed
+        // whole-hand clench. Free fingers retain a loose, unequal curl.
+        const starts = dominant ? [0.09, 0, 0.04, 0.17] : [0.04, 0.02, 0.11, 0.18];
+        const durations = [0.43, 0.38, 0.46, 0.39];
+        const peel = [0.055, 0.075, 0.025, 0];
         for (let i = 0; i < 4; i++) {
-          const closed = ease((shut - i * 0.06) / 0.8);
-          for (const joint of limb.fingers[i]) {
-            joint.object.rotation.y = side * THREE.MathUtils.lerp(joint.rest, joint.shut, closed);
+          for (let j = 0; j < limb.fingers[i].length; j++) {
+            const joint = limb.fingers[i][j];
+            const close = ease((contact - starts[i] - j * 0.045) / (durations[i] + j * 0.04));
+            const open = ease((letGo - peel[i] - (2 - j) * 0.025) / (0.15 + i * 0.014));
+            const loose = joint.rest + [0.08, 0.06, 0.04][j] * (0.65 + i * 0.2);
+            // A small, one-off pressure adjustment after contact, strongest
+            // in the index finger. Stay within the tested rail-clearance pose.
+            const adjust = ease((contact - 0.47 - i * 0.03) / 0.1)
+              * (1 - ease((contact - 0.62 - i * 0.025) / 0.12));
+            // A light readjustment when inspecting and raising the board:
+            // one finger unloads at a time while the other hand supports it.
+            const shiftAt = (dominant ? 10.7 : 11.35) + i * 0.13;
+            const liftAt = (dominant ? 18.95 : 19.3) + i * 0.09;
+            const shift = ease((time - shiftAt) / 0.16) * (1 - ease((time - shiftAt - 0.23) / 0.3))
+              + ease((time - liftAt) / 0.13) * (1 - ease((time - liftAt - 0.18) / 0.24));
+            const pressure = close * (dominant ? 1 : 0.97)
+              * (1 - adjust * (i === 0 ? 0.1 : 0.035)) * (1 - shift * (i === 0 ? 0.085 : 0.025));
+            joint.object.rotation.y = side * THREE.MathUtils.lerp(loose, joint.shut, pressure * (1 - open));
           }
         }
-        // The thumb comes over last, once the fingers have something for it
-        // to press against.
-        const pinch = ease((shut - 0.24) / 0.76);
-        for (const joint of limb.thumb) {
-          joint.object.rotation.z = side * THREE.MathUtils.lerp(joint.rest, joint.shut, pinch);
+        // Opposition starts while the fingers are still finding the rail.
+        // The thumb base rolls in first; the tip settles later and unloads
+        // first. Neither thumb snaps into the same pose on the same frame.
+        for (let j = 0; j < limb.thumb.length; j++) {
+          const joint = limb.thumb[j];
+          const oppose = ease((contact - (j === 0 ? -0.04 : 0.14)) / (j === 0 ? 0.57 : 0.51));
+          const unweight = ease((letGo - (j === 0 ? 0.025 : 0)) / (j === 0 ? 0.2 : 0.15));
+          const pressure = oppose * (dominant ? 1 : 0.93) * (1 - unweight);
+          joint.object.rotation.z = side * THREE.MathUtils.lerp(joint.rest, joint.shut, pressure);
         }
 
         /* The arm: the wrist comes from the board, the shoulder from the
@@ -335,11 +348,14 @@ export function buildOpeningHands() {
            far too small to read as motion and are what stops a held pose
            looking like a photograph with arms drawn on it. */
         const breath = Math.sin(time * 1.15 + side * 0.4) * 14;
-        const strain = Math.sin(time * 7.3 + side * 2.1) * 5 * held * (1 - moving);
+        const strain = (Math.sin(time * 13.7 + side * 2.1) * 8
+          + Math.sin(time * 19.3 + side * 0.7) * 5) * held;
+        const stride = time * Math.PI * 1.8 + (dominant ? 0.2 : 2.7);
+        const swing = Math.sin(stride) * moving;
         shoulder.copy(eye)
-          .addScaledVector(right, side * 900 + strain)
-          .addScaledVector(up, -680 + breath + Math.sin(time * 4.4 + (side > 0 ? 0 : Math.PI)) * 24 * moving)
-          .addScaledVector(forward, -240 + breath * 0.5);
+          .addScaledVector(right, side * (dominant ? 760 : 805) + strain + swing * 38)
+          .addScaledVector(up, -820 + (dominant ? 24 : -18) + breath + swing * 54)
+          .addScaledVector(forward, -440 + breath * 0.5 + Math.sin(stride - 0.5) * 22 * moving);
 
         chord.subVectors(wrist, shoulder);
         const span = Math.max(1, chord.length());
@@ -348,16 +364,25 @@ export function buildOpeningHands() {
            longer than the gap they cross — which is what leaves a bend in the
            elbow. Two bones that exactly span the distance give a straight
            arm, and a straight arm is a stick. */
-        const upperLength = span * 0.617;
-        const foreLength = span * 0.551;
+        const extension = travel * (1 - gone);
+        const upperLength = span * THREE.MathUtils.lerp(0.76, 0.65, extension);
+        const foreLength = span * THREE.MathUtils.lerp(0.68, 0.59, extension);
+        // Preserve a substantial silhouette at the cinematic carrying distance.
+        const fullness = THREE.MathUtils.clamp(Math.sqrt(span / 2400), 1, 1.48);
+        limb.fore.scale.x = limb.fore.scale.y = fullness;
+        limb.upper.scale.x = limb.upper.scale.y = fullness;
+        limb.elbow.scale.set(fullness, fullness * 1.08, fullness);
+        limb.hem.scale.setScalar(fullness);
+        limb.bare.scale.x = 0.9 * fullness;
+        limb.bare.scale.y = fullness;
 
         /* Which way the elbow breaks: down and out, swinging a little with
            the walk. Squared to the chord, so a bend stays a bend at whatever
            angle the board is being held. */
         pole.copy(up).multiplyScalar(-1)
-          .addScaledVector(right, side * (0.62 + Math.sin(time * 2.2 + side * 1.4) * 0.09 * moving
-            + Math.sin(time * 0.9 + side) * 0.02))
-          .addScaledVector(forward, -0.14);
+          .addScaledVector(right, side * ((dominant ? 0.48 : 0.65) + swing * 0.17
+            + Math.sin(time * 0.9 + side) * 0.035 + strain * 0.0015))
+          .addScaledVector(forward, -0.2 + Math.sin(stride - 0.3) * 0.035 * moving);
         pole.addScaledVector(axis, -pole.dot(axis)).normalize();
 
         // Cosine rule: how far down the chord the elbow sits, and how far off.
@@ -370,13 +395,19 @@ export function buildOpeningHands() {
 
         // Bare to the cuff, cuff to the elbow.
         cuffAt.copy(elbowAt).sub(wrist).normalize();
-        aim(limb.bare, wrist, cuffAt.clone().multiplyScalar(340).add(wrist), pole);
-        cuffAt.multiplyScalar(296).add(wrist);
+        const bareLength = Math.min(480, wrist.distanceTo(elbowAt) * 0.32);
+        bareEnd.copy(wrist).addScaledVector(cuffAt, bareLength + 35);
+        aim(limb.bare, wrist, bareEnd, pole);
+        // Pronation rolls the flattened forearm inward without rotating the
+        // contact palm or disturbing the fingers on the rail.
+        limb.bare.rotateZ(side * (0.25 + swing * 0.055));
+        cuffAt.multiplyScalar(bareLength).add(wrist);
         aim(limb.fore, cuffAt, elbowAt, pole);
         aim(limb.upper, elbowAt, shoulder, pole);
         limb.hem.position.copy(cuffAt);
         limb.hem.quaternion.copy(limb.fore.quaternion);
         limb.elbow.position.copy(elbowAt);
+        limb.elbow.quaternion.copy(limb.fore.quaternion);
       }
     },
   };

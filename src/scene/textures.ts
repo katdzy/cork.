@@ -311,16 +311,31 @@ export function plaster(): Maps {
 /* --------------------------------------------------------------- concrete */
 
 /**
- * Board-formed concrete: one poured panel per tile.
+ * Concrete, in the two ways it gets made.
  *
- * The seam and the two tie holes are drawn at the tile's own edge rather than
- * added as geometry, so the panel grid comes free with the repeat — set it to
- * four down the wall and the wall has four courses. They are what makes it
- * read as poured rather than as grey paint; a concrete wall without the marks
- * of how it was made is just a colour.
+ * **Board-formed** — the default — is a wall: poured against timber shuttering,
+ * one panel per tile. The seam and the two tie holes are drawn at the tile's
+ * own edge rather than added as geometry, so the panel grid comes free with
+ * the repeat — set it to four down the wall and the wall has four courses.
+ * They are what makes it read as poured rather than as grey paint; a concrete
+ * wall without the marks of how it was made is just a colour.
+ *
+ * **Slab** is the ground: poured flat, floated, and walked on. It has none of
+ * those marks, because there was no formwork to leave them — and that is not
+ * a detail, it is the whole reason this option exists. The street outside the
+ * kitchen was surfaced with the wall texture, so every tile edge laid a black
+ * lift joint across the pavement and every tile laid down two form ties, which
+ * arrived on screen as a set of evenly spaced dark lines ruled across the
+ * ground with little dark ellipses sitting on them. A wall's marks on a floor
+ * do not read as concrete. They read as a rendering fault, which is exactly
+ * what they were.
+ *
+ * The board grain goes with them. On a wall it is the grain of the shuttering;
+ * on a slab there was nothing for it to be the grain *of*, and stretched along
+ * thirty-five metres of pavement it turned the street into decking.
  */
-export function concrete(): Maps {
-  const ck = 'concrete';
+export function concrete(formwork = true): Maps {
+  const ck = formwork ? 'concrete' : 'concrete-slab';
   if (!cache.has(ck)) {
     const rnd = rng(70113);
     const h = canvas(1024, (ctx, s) => {
@@ -338,13 +353,15 @@ export function concrete(): Maps {
       }
 
       // the grain of the shuttering boards, running across the pour
-      ctx.globalAlpha = 0.5;
-      for (let y = 0; y < s; y += 3) {
-        const v = 138 + (rnd() - 0.5) * 26;
-        ctx.fillStyle = `rgb(${v},${v},${v})`;
-        ctx.fillRect(0, y, s, 1 + rnd());
+      if (formwork) {
+        ctx.globalAlpha = 0.5;
+        for (let y = 0; y < s; y += 3) {
+          const v = 138 + (rnd() - 0.5) * 26;
+          ctx.fillStyle = `rgb(${v},${v},${v})`;
+          ctx.fillRect(0, y, s, 1 + rnd());
+        }
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
 
       // fine aggregate, and the odd air pocket a wall never quite loses
       for (let i = 0, n = detail(42000); i < n; i++) {
@@ -362,30 +379,38 @@ export function concrete(): Maps {
         ctx.fill();
       }
 
-      // the joint between one lift and the next, at the tile's own edge
-      ctx.fillStyle = 'rgba(0,0,0,0.42)';
-      ctx.fillRect(0, 0, s, 7);
-      ctx.fillStyle = 'rgba(255,255,255,0.16)';
-      ctx.fillRect(0, 7, s, 3);
+      /* The joint between one lift and the next, at the tile's own edge, and
+         the holes the form ties came out of. Both are marks the shuttering
+         left, so both belong only to the wall. */
+      if (formwork) {
+        ctx.fillStyle = 'rgba(0,0,0,0.42)';
+        ctx.fillRect(0, 0, s, 7);
+        ctx.fillStyle = 'rgba(255,255,255,0.16)';
+        ctx.fillRect(0, 7, s, 3);
 
-      // and the holes the form ties came out of
-      for (const tx of [s * 0.22, s * 0.72]) {
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.beginPath();
-        ctx.arc(tx, 62, 11, 0, 7);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,0.18)';
-        ctx.beginPath();
-        ctx.arc(tx, 57, 8, 0, 7);
-        ctx.fill();
+        for (const tx of [s * 0.22, s * 0.72]) {
+          ctx.fillStyle = 'rgba(0,0,0,0.5)';
+          ctx.beginPath();
+          ctx.arc(tx, 62, 11, 0, 7);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(255,255,255,0.18)';
+          ctx.beginPath();
+          ctx.arc(tx, 57, 8, 0, 7);
+          ctx.fill();
+        }
       }
     });
-    cache.set(ck, tex(tintFrom(h, '#a9a9a6', '#3d3d3c'), [3, 4], true));
-    cache.set(`${ck}:n`, tex(heightToNormal(h, 1.9), [3, 4], false));
+    /* Denser on the ground, because the ground is enormous. The wall's repeat
+       is chosen to put four courses up a room; the same figure spread over
+       thirty-five metres of pavement makes every speck of aggregate the size
+       of a fist. */
+    const rpt: [number, number] = formwork ? [3, 4] : [9, 11];
+    cache.set(ck, tex(tintFrom(h, '#a9a9a6', '#3d3d3c'), rpt, true));
+    cache.set(`${ck}:n`, tex(heightToNormal(h, 1.9), rpt, false));
     /* Where the pour met the shuttering it took the board's polish, and where
        it dried open it did not — the reason a concrete wall reads as poured
        rather than painted is that the sheen is uneven across a single panel. */
-    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.72, 1), [3, 4], false));
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.72, 1), rpt, false));
   }
   return {
     map: cache.get(ck),

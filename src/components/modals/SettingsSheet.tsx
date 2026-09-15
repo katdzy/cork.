@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useCork } from '../../lib/store';
-import { setGraphicsPref, useGraphics, type GraphicsPref, type Tier } from '../../scene/quality';
+import { isHandheld, setGraphicsPref, useGraphics, type GraphicsPref, type Tier } from '../../scene/quality';
 import { MODELS, setFinish, setModel, useLaptop } from '../../scene/models';
 import { startTour } from '../../lib/tour';
 import { Wordmark } from '../chrome/Wordmark';
@@ -19,9 +19,9 @@ const TIER_WORDS: Record<Tier, string> = { low: 'Low', medium: 'Medium', high: '
 const swatch = (body: number) => `#${body.toString(16).padStart(6, '0')}`;
 
 const TIER_BLURBS: Record<Tier, string> = {
-  low: 'Smaller shadow maps, quarter-size surfaces and no light shafts, for a machine that would rather not.',
-  medium: 'A balance — most of the detail, at half the texture size.',
-  high: 'Everything: the largest shadow maps, full-size surfaces, the finest light trace.',
+  low: 'Hard shadows, quarter-size surfaces, no light in the air and no lens, for a machine that would rather not.',
+  medium: 'A balance — soft shadows, bloom and light through the window, at half the texture size.',
+  high: 'Everything: shadows that soften with distance, the finest light trace, and the full lens on top.',
 };
 
 export function SettingsSheet({ onClose, onReplayOpening }: { onClose(): void; onReplayOpening(): void }) {
@@ -191,8 +191,15 @@ export function SettingsSheet({ onClose, onReplayOpening }: { onClose(): void; o
           {pref === 'auto'
             ? `Matched to this device — currently ${TIER_WORDS[tier]}.`
             : TIER_BLURBS[tier]}{' '}
-          Shadows, texture detail and how finely the room&rsquo;s light is traced all follow this;
-          changing it builds the room again.
+          Shadows, texture detail, how finely the room&rsquo;s light is traced and what happens to
+          the frame afterwards all follow this; changing it builds the room again.
+          {isHandheld() && (
+            <>
+              {' '}
+              On a phone or tablet a few of the whole-screen effects stay off whichever you pick —
+              they cost far more on this kind of chip than they show.
+            </>
+          )}
         </p>
 
         <div className="hairline my-5" />

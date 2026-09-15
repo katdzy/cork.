@@ -18,6 +18,7 @@ import { FinishPicker } from './FinishPicker';
 export interface CanvasApi {
   focusOn(memory: Memory, zoom?: number): void;
   fitAll(): void;
+  prepareOpening(): void;
   centerPoint(): { x: number; y: number };
   addFiles(files: File[]): void;
 }
@@ -106,10 +107,15 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(
     () => ({
       focusOn: (memory, zoom) => scene.focusOn(memory, zoom),
       fitAll: () => scene.fitAll(),
+      prepareOpening: () => {
+        setScene('kitchen');
+        setView('room');
+        scene.resetView();
+      },
       centerPoint: scene.centerPoint,
       addFiles: (files: File[]) => void addFilesToBoard(files, scene.centerPoint(), boardId),
     }),
-    [scene.focusOn, scene.fitAll, scene.centerPoint, boardId],
+    [scene.focusOn, scene.fitAll, scene.resetView, scene.centerPoint, setScene, setView, boardId],
   );
 
   /* -------------------------------------------------------- file drops */

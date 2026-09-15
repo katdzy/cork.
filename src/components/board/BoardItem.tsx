@@ -24,6 +24,25 @@ const HELD = '#5f7f99';
 const prefersStillness = () =>
   typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+/** The types that draw themselves; everything else goes through `Frame`. */
+const PAPER = new Set(['sticky', 'note', 'ticket', 'label', 'postcard']);
+
+/**
+ * Whether what you can see is the shape of the box it sits in.
+ *
+ * Only the shadow asks, and only while the camera is moving. A rectangular
+ * item is given a `box-shadow` in flight instead of a `drop-shadow`, which is
+ * a paint rather than an offscreen blur and is most of what the board costs
+ * during a swing — see `.board-moving` in `index.css`. A box-shadow follows
+ * the border box, so the three things whose outline is something else — a torn
+ * notebook page, a ticket with two punched notches, a scrapbook sheet sitting
+ * inside a margin of nothing — keep the blur and pay for it.
+ */
+const irregular = (memory: Memory) =>
+  memory.type === 'note' ||
+  memory.type === 'ticket' ||
+  (!PAPER.has(memory.type) && memory.frameStyle === 'scrapbook');
+
 interface Props {
   memory: Memory;
   index: number;
@@ -388,11 +407,12 @@ function BoardItemBase({ memory, index, toBoard, interactive = true, dimmed = fa
   const entranceDelay = fresh ? 0 : Math.min(index * 0.022, 0.5);
 
   // a locked item doesn't rise off the cork under the pointer, shadow included
-  const shadowClass = dragging
-    ? 'item-shadow-drag'
-    : (hovered && !locked) || selected
-      ? 'item-shadow-hover'
-      : 'item-shadow';
+  const shadowClass =
+    (dragging
+      ? 'item-shadow-drag'
+      : (hovered && !locked) || selected
+        ? 'item-shadow-hover'
+        : 'item-shadow') + (irregular(memory) ? ' item-irregular' : '');
 
   /**
    * The visual box of the object, in the tilt layer's coordinates.

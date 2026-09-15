@@ -12,6 +12,8 @@ import { Orbit } from './orbit';
 import { captureProbe, disposeNeutral, type Probe } from './probe';
 import { cancelBakes } from './bake';
 import { quality, useGraphics } from './quality';
+import { createPost } from './post';
+import { installSoftShadows } from './softShadows';
 import { disposeTextures } from './textures';
 import { markRoomReady } from '../lib/startup';
 
@@ -142,13 +144,23 @@ export function useRoomScene(
      * edges were never the problem.
      */
     const renderer = new THREE.WebGLRenderer({
-      antialias: q.antialias,
+      /*
+       * Asked for only when the room goes straight to the canvas.
+       *
+       * With a post chain in front of it the room is drawn into a target of
+       * its own and the canvas receives one full-screen triangle, which has
+       * no interior edges for a multisample resolve to find. The samples move
+       * onto that target instead — same cost, spent where the geometry is —
+       * and asking for them here as well would pay for a second multisampled
+       * buffer that nothing is ever rasterised into.
+       */
+      antialias: q.antialias && !q.post,
       powerPreference: q.powerPreference,
     });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = q.shadowType;
+    renderer.shadowMap.type = installSoftShadows();
     // The rooms never move, so their shadows are drawn once and kept. Only a
     // prop being dragged, or a change of room, asks for another pass.
     renderer.shadowMap.autoUpdate = false;
@@ -191,6 +203,18 @@ export function useRoomScene(
      */
     const pmrem = new THREE.PMREMGenerator(renderer);
     pmrem.compileCubemapShader();
+
+    /*
+     * And what happens to the frame once the room is in it.
+     *
+     * Constructed here rather than lazily, because it takes the tone curve out
+     * of the materials on the way up — see `post.ts`. Doing that later would
+     * mean recompiling every shader program in the room at the moment it
+     * happened. On the bottom tier it constructs to a pass-through and the
+     * renderer keeps its own tone mapping, so nothing below has to ask which
+     * it got.
+     */
+    const post = createPost(renderer);
 
     /* --------------------------------------------------- the DOM board */
     const cssScene = new THREE.Scene();
@@ -238,6 +262,8 @@ export function useRoomScene(
     let needsRender = true;
     /** True once a struggling machine has given up the decorative light. */
     let shedDone = false;
+    /** And once it has given up shadows that work out their own softness. */
+    let hardDone = false;
 
     /**
      * Put away anything marked as the first thing to go.
@@ -254,6 +280,33 @@ export function useRoomScene(
       root.traverse((o) => {
         if (o.userData.shed && o.visible) {
           o.visible = false;
+          found = true;
+        }
+      });
+      return found;
+    };
+
+    /**
+     * Put every light's shadow back on the single cheap tap.
+     *
+     * A rung the frame-time ladder can reach without recompiling anything,
+     * which is the whole reason it is spelled this way. The filter in
+     * `softShadows.ts` reads a light's radius as its size and takes the cheap
+     * branch at zero — so setting the radius is all it takes to go from two
+     * dozen texture fetches per shadowed pixel to one, instantly, with no
+     * shader rebuild and therefore no stall at the exact moment the machine
+     * is already behind.
+     *
+     * Applied to each room as it arrives as well as to the one in the scene,
+     * for the same reason `hideShed` is: a room built after the machine gave
+     * up would otherwise walk back in with everything switched on.
+     */
+    const hardenShadows = (root: THREE.Object3D) => {
+      let found = false;
+      root.traverse((o) => {
+        const light = o as THREE.Light & { shadow?: THREE.LightShadow };
+        if (light.shadow && light.shadow.radius > 0) {
+          light.shadow.radius = 0;
           found = true;
         }
       });
@@ -350,6 +403,52 @@ export function useRoomScene(
       else enterCork(false);
     };
 
+    /*
+     * Which way the light falls on the board, from where the camera is now.
+     *
+     * The board is the one part of this scene the renderer never touches. It
+     * is live DOM sitting on a CSS3D plane — real photographs, real text, real
+     * inputs — and a browser laying out a drop shadow has no way of knowing
+     * that there is a window three metres to the right of it. So every shadow
+     * on it was cast straight down, in every room, at every angle, while
+     * everything around it was lit by a sun.
+     *
+     * This is the two numbers that fix that. The room's key light and the
+     * middle of the board are both projected into screen space and one is
+     * subtracted from the other, which gives the direction a shadow on the
+     * board should fall — in the same pixels the browser is about to draw it
+     * in. Swing the camera and it swings; walk into the studio, where the
+     * light is two shades hanging directly overhead rather than a window off
+     * to one side, and every shadow on the board shortens and straightens.
+     *
+     * The angle goes out alongside the vector because CSS can multiply a
+     * number but cannot take an arctangent, and the sheen across a photograph
+     * is a gradient, which needs one.
+     */
+    const lightFrom = new THREE.Vector3();
+    const boardCentre = new THREE.Vector3();
+    const publishLight = () => {
+      lightFrom.set(...active.keyLight).project(camera);
+      boardCentre.copy(boardToWorld(BOARD_W / 2, BOARD_H / 2)).project(camera);
+      /* Screen space, so y is flipped: the projection puts +y up and every
+         shadow offset below is written in CSS pixels, where +y is down. */
+      let x = boardCentre.x - lightFrom.x;
+      let y = lightFrom.y - boardCentre.y;
+      const length = Math.hypot(x, y);
+      if (length < 1e-4) {
+        // dead overhead, or as near as makes no difference
+        x = 0;
+        y = 1;
+      } else {
+        x /= length;
+        y /= length;
+      }
+      boardEl.style.setProperty('--cast-x', x.toFixed(3));
+      boardEl.style.setProperty('--cast-y', y.toFixed(3));
+      // 0deg points a CSS gradient at the top of the box; 90deg at its right
+      boardEl.style.setProperty('--cast-deg', `${((Math.atan2(x, -y) * 180) / Math.PI).toFixed(1)}deg`);
+    };
+
     const applyScene = (id: SceneId, animated: boolean) => {
       if (room && active.id === id) return;
       if (room) scene.remove(room);
@@ -386,8 +485,15 @@ export function useRoomScene(
       }
       room = entry.group;
       if (shedDone) hideShed(entry.group);
+      if (hardDone) hardenShadows(entry.group);
       scene.environment = entry.probe.texture;
       scene.environmentIntensity = active.envIntensity;
+      post.setSource(new THREE.Vector3(...active.scatterFrom), active.scatterTint);
+      post.setGrade(active.grade);
+      /* Immediately rather than on the next throttled tick: a room swap
+         changes where the light is by a right angle, and a board that keeps
+         the old room's shadows for a tenth of a second is a visible wrong. */
+      publishLight();
 
       /* The two desks are different lengths, so anything left standing off the
          end of the shorter one is nudged back onto it. Only the mesh moves —
@@ -523,6 +629,44 @@ export function useRoomScene(
            through and take the resolution instead. */
         if (hideShed(scene)) return;
       }
+      /* Then the scattered light and the occlusion — whole passes over the
+         frame, given up before anything that changes how the room is shaded.
+         On a handheld there are neither, and this falls straight through
+         rather than spending a rung saying so. See `Post.relieve`. */
+      if (post.relieve()) return;
+      /*
+       * Then the softness of the shadows, which is the last thing here that
+       * is a look rather than a resolution.
+       *
+       * It goes late because it is the most missed: a shadow that spreads as
+       * it travels is most of what stops the room looking like a diagram.
+       * But it is also, by some distance, the most expensive thing left —
+       * measured at about half of everything it costs to draw the room, which
+       * is more than the next three rungs put together. So it goes before the
+       * resolution does, because a slightly harder room still reads as the
+       * room and a room at half resolution does not.
+       *
+       * Only where the tier has it to give, which is now neither a handheld
+       * nor the bottom tier. Without the two passes installed, `shadow.radius`
+       * no longer means the size of the light — it means how far apart
+       * three.js spreads nine fixed taps — and zeroing it does not skip any of
+       * the nine. It collapses them onto one texel and hands back a shadow
+       * with the map's own staircase in it, for no saving at all: a rung that
+       * costs a look and buys nothing, which is the one shape a ladder must
+       * not have. So it is skipped rather than spent, and the resolution goes
+       * instead.
+       */
+      if (q.softShadows && !hardDone) {
+        hardDone = true;
+        if (hardenShadows(scene)) {
+          renderer.shadowMap.needsUpdate = true;
+          return;
+        }
+      }
+      /* And then the tail of the bloom pyramid, which is small — small enough
+         that it has to come after the shadows rather than before them, or a
+         phone spends its first rung on nothing. See `Post.thin`. */
+      if (post.thin()) return;
       if (dprStep >= DPR_SCALE.length - 1) return;
       dprStep++;
       applyDpr();
@@ -537,6 +681,8 @@ export function useRoomScene(
     /* The readout is a React render, and a React render is the whole subtree.
        It does not need to happen sixty times a second to read as live. */
     let labelAt = 0;
+    /** And the same for the light direction, which is written the same way. */
+    let lightAt = 0;
     const measureZoom = () => {
       const a = boardToWorld(0, BOARD_H / 2).project(camera);
       const b = boardToWorld(BOARD_W, BOARD_H / 2).project(camera);
@@ -597,7 +743,20 @@ export function useRoomScene(
            somewhere else on the page, and neither is the renderer's fault. */
         if (raw < 0.5) {
           debt = clamp(debt + raw - BUDGET, -0.12, 0.6);
-          if (debt > 0.3) {
+          /*
+           * Two thirds of a second of sustained trouble, not a whole one.
+           *
+           * The threshold is a time: at three hundred milliseconds of
+           * accumulated lateness, a phone managing thirty frames a second
+           * took most of a second to give up each rung, and five rungs took
+           * five seconds — which is five seconds of the exact stutter the
+           * ladder exists to end, every time the reader swings the camera.
+           * Reacting sooner costs a machine that hitched once nothing,
+           * because a single slow frame still cannot reach two hundred
+           * milliseconds on its own and anything over half a second is
+           * discarded above as not a frame at all.
+           */
+          if (debt > 0.2) {
             relieve();
             debt = 0;
           }
@@ -608,17 +767,32 @@ export function useRoomScene(
         boardMoving = false;
         boardEl.classList.remove('board-moving');
       }
-      // the charging screen, which is the one thing here that moves on its own
-      if (animateProps(now / 1000)) needsRender = true;
+      /* The charging screen, which is the one thing here that moves on its
+         own — and which is given the camera so it can decline to move when it
+         is behind you. See `animateProps`. */
+      if (animateProps(now / 1000, camera)) needsRender = true;
 
       if (!needsRender) return;
       needsRender = false;
 
-      renderer.render(scene, camera);
+      post.render(scene, camera);
       css.render(cssScene, camera);
       markRoomReady();
       // it starts hidden so it can't flash at the top-left corner for a frame
       if (boardEl.style.visibility !== 'visible') boardEl.style.visibility = 'visible';
+
+      /*
+       * Written on the same throttle as `--inv-zoom`, and for the same
+       * reason: these are inherited custom properties, so each write
+       * invalidates style for every memory on the board and everything
+       * inside them. Once every ninth of a second while the camera is in
+       * flight is far more often than a shadow needs to move to read as
+       * attached to the light, and exact the moment it lands.
+       */
+      if (!moving || now - lightAt > 110) {
+        lightAt = now;
+        publishLight();
+      }
 
       const z = measureZoom();
       if (Math.abs(z - shownZoom) > 0.004) {
@@ -1026,6 +1200,7 @@ export function useRoomScene(
          a rebuild at another tier would otherwise reuse the old sizes and the
          setting would appear to do nothing. */
       disposeTextures();
+      post.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       // hand the board back so React still owns a node that is in the document

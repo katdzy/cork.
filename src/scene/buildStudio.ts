@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { COUNTER, ROOM } from './layout';
-import { arc, bloom, box, cylinder, foliage, lightCone, lightPool, panel, pierced, shaft, still } from './parts';
+import { arc, bloom, box, cylinder, foliage, lightCone, lightPool, outdoors, panel, pierced, shaft, still } from './parts';
 import { brushed, concrete, cork, fabric, oak, smears, weave } from './textures';
 import { quality } from './quality';
+import { lightWidth } from './softShadows';
 
 /**
  * The studio: a concrete workspace some way up an office building.
@@ -38,6 +39,18 @@ const GLAZING = {
   /** Centres of the vertical mullions are spaced by this. */
   bay: 2180,
   transom: 3980,
+} as const;
+
+/**
+ * The middle of the glass, for anything outside this file that needs to know
+ * where the light gets in — the scattering pass in `post.ts`, chiefly.
+ * Pushed a little above centre and a little outboard, because the bright part
+ * of a curtain wall at this hour is the upper lights, not the spandrel.
+ */
+export const STUDIO_GLAZING = {
+  x: ROOM.halfWidth - 200,
+  y: (GLAZING.sill + GLAZING.head) / 2 + 900,
+  z: (GLAZING.near + GLAZING.far) / 2,
 } as const;
 
 /**
@@ -270,7 +283,7 @@ export function buildStudio(): THREE.Group {
   // the view out, hung well outside the glass so it never clips the frame
   const view = new THREE.Mesh(
     new THREE.PlaneGeometry(glazeD * 2.4, glazeH * 2.1),
-    new THREE.MeshBasicMaterial({ map: cityTexture(), toneMapped: false }),
+    outdoors(cityTexture()),
   );
   view.rotation.y = -Math.PI / 2;
   view.position.set(gx + 2600, glazeY + 900, glazeZ);
@@ -382,21 +395,42 @@ export function buildStudio(): THREE.Group {
     new THREE.BoxGeometry(CORRIDOR.depth - 500, 46, 420),
     new THREE.MeshBasicMaterial({ color: 0xf6f9ff, toneMapped: false }),
   ).translateX(dx - CORRIDOR.depth / 2).translateY(DOOR.head + 1490).translateZ(doorZ)));
-  const corridorWall = new THREE.MeshStandardMaterial({ color: 0x6a6b69, roughness: 0.9 });
+  /*
+   * The two lights in the doorway, in the order they are worth having.
+   *
+   * Two, not one, where there is room for two: the far one lifts the office
+   * beyond off black, and the near one stands in the opening so the doorway
+   * itself reads as a source of light rather than as a grey rectangle painted
+   * on the wall. Both are fills — see `fills` in `quality.ts` — and a machine
+   * that cannot afford both gives up the near one first, because the far one
+   * is the one doing the work.
+   *
+   * Where neither is affordable the corridor is lit by nothing at all, so its
+   * walls are painted brighter to stand in: a flat grey that is merely light
+   * is a poorer corridor than a lit one and a far better one than a black
+   * hole. The strip of ceiling light above is unlit geometry and was never
+   * affected either way, which is why the opening still reads at all.
+   */
+  const fills = quality().fills;
+  const corridorWall = new THREE.MeshStandardMaterial({
+    color: fills > 0 ? 0x6a6b69 : 0x8e8f8c,
+    roughness: 0.9,
+  });
   for (const side of [-1, 1]) {
     g.add(still(box(CORRIDOR.depth, DOOR.head + 1600, 60, corridorWall,
       dx - CORRIDOR.depth / 2, (DOOR.head + 1600) / 2, doorZ + side * ((doorD + 4200) / 2))));
   }
 
-  // Two, not one: the far one lifts the office beyond off black, the near one
-  // stands in the opening so the doorway itself reads as a source of light
-  // rather than as a grey rectangle painted on the wall.
-  const corridorLight = new THREE.PointLight(0xe6eeff, 2.9e7, 0, 2);
-  corridorLight.position.set(dx - 1500, DOOR.head + 500, doorZ);
-  g.add(corridorLight);
-  const doorGlow = new THREE.PointLight(0xdde8ff, 9e6, 0, 2);
-  doorGlow.position.set(dx - 320, DOOR.head - 900, doorZ);
-  g.add(doorGlow);
+  if (fills > 0) {
+    const corridorLight = new THREE.PointLight(0xe6eeff, 2.9e7, 0, 2);
+    corridorLight.position.set(dx - 1500, DOOR.head + 500, doorZ);
+    g.add(corridorLight);
+  }
+  if (fills > 1) {
+    const doorGlow = new THREE.PointLight(0xdde8ff, 9e6, 0, 2);
+    doorGlow.position.set(dx - 320, DOOR.head - 900, doorZ);
+    g.add(doorGlow);
+  }
 
   const floor = panel(W, D, floorWood);
   floor.rotation.x = -Math.PI / 2;
@@ -497,6 +531,15 @@ export function buildStudio(): THREE.Group {
     spot.shadow.camera.near = 200;
     spot.shadow.camera.far = 14000;
     spot.shadow.camera.updateProjectionMatrix();
+    /*
+     * A shade forty centimetres across, hanging a metre above a desk: the
+     * softest light in either room, and the one whose shadows most obviously
+     * spread. Stated in texels directly rather than through `lightWidth`,
+     * because a spot's map is a perspective one and a world size does not
+     * convert to a constant number of texels across it — it depends how far
+     * down the cone you are standing.
+     */
+    spot.shadow.radius = quality().softShadows ? 18 : 3;
     g.add(spot, spot.target);
     lights.push(spot);
   }
@@ -611,7 +654,7 @@ export function buildStudio(): THREE.Group {
   sun.shadow.mapSize.setScalar(quality().sunShadow);
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 30;
-  sun.shadow.radius = 2;
+
   const sc = sun.shadow.camera;
   sc.left = -8200;
   sc.right = 8200;
@@ -620,6 +663,10 @@ export function buildStudio(): THREE.Group {
   sc.near = 2000;
   sc.far = 30000;
   sc.updateProjectionMatrix();
+  /* Twice the kitchen's, for the same sun: it is late, it is low, and it
+     arrives through three bays of glass at a glancing angle rather than
+     through one opening square on. Everything about that widens the source. */
+  lightWidth(sun.shadow, 240);
   g.add(sun, sun.target);
 
   /*
@@ -652,8 +699,13 @@ export function buildStudio(): THREE.Group {
    * on — an office at this hour has both — but they are accents over daylight
    * now rather than the only thing holding the room out of black.
    */
-  g.add(new THREE.HemisphereLight(0x9ab4d0, 0x4a3a2c, 0.44));
-  const spill = new THREE.PointLight(0xffd3a4, 4.4e6, 0, 1.9);
+  /* Raised, not lowered. This is a concrete box at dusk lit by two small
+     lamps and a wall of glass, and the glass is four stops over everything
+     else in the room — so the parts of it not directly under a pendant are
+     being asked to hold their own against a blown highlight, which is the
+     hardest thing a dim surface ever has to do. What holds them up is this. */
+  g.add(new THREE.HemisphereLight(0x9ab4d0, 0x4a3a2c, 0.56));
+  const spill = new THREE.PointLight(0xffd3a4, 5.4e6, 0, 1.9);
   spill.position.set(STUDIO_BOARD.centreX, 3600, 3200);
   g.add(spill);
   return g;

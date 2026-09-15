@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LoadingScreen } from './LoadingScreen';
 import { useMedia } from '../../lib/useMedia';
-import { OPENING } from '../../scene/openingTiming';
+import { OPENING, PLACEMENT } from '../../scene/openingTiming';
 
 const DESCRIPTIONS = [
   'Through your eyes: an old corkboard catches your attention beside a pile of rubbish. You stop and look down.',
@@ -65,8 +65,14 @@ export function Opening({ onComplete }: { onComplete: () => void }) {
               if (fade.current) {
                 const opening = Math.max(0, 1 - elapsed / 0.8);
                 const cut = Math.max(0, 1 - Math.abs(elapsed - OPENING.home) / 0.8);
-                const ending = Math.max(0, (elapsed - (OPENING.duration - 0.8)) / 0.8);
-                fade.current.style.opacity = String(Math.max(opening, cut, ending));
+                fade.current.style.opacity = String(Math.max(opening, cut));
+              }
+              if (dialog.current) {
+                const expand = Math.min(1, Math.max(0, (elapsed - PLACEMENT.stepBack) / 2));
+                const blend = Math.min(1, Math.max(0, (elapsed - PLACEMENT.crossfade) / (OPENING.duration - PLACEMENT.crossfade)));
+                const smooth = (n: number) => n * n * (3 - 2 * n);
+                dialog.current.style.setProperty('--letterbox-scale', String(1 - smooth(expand)));
+                dialog.current.style.opacity = String(1 - smooth(blend));
               }
               if (Math.floor(elapsed * 4) !== reported) {
                 reported = Math.floor(elapsed * 4); setSeconds(elapsed);
@@ -110,6 +116,7 @@ export function Opening({ onComplete }: { onComplete: () => void }) {
       <div ref={fade} className="opening-transition" aria-hidden="true" style={{ opacity: still ? 0 : 1 }} />
       <div className="opening-letterbox opening-letterbox-top" aria-hidden="true" />
       <div className="opening-letterbox opening-letterbox-bottom" aria-hidden="true" />
+      <h1 className={`opening-welcome${(still && chapter === 2) || seconds >= 26 ? ' is-visible' : ''}`}>Welcome to Cork.</h1>
       {!loaded && <LoadingScreen progress={prepared ? 100 : 90} label={prepared ? 'Everything is in place.' : 'Setting the scene…'} />}
       <p id="opening-description" className="sr-only" aria-live="polite">{DESCRIPTIONS[chapter]} Press Escape to skip. {still ? 'Use Next scene to continue.' : 'Press Space to pause or resume.'}</p>
       {loaded && <div className="opening-controls">

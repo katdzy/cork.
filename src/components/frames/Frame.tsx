@@ -58,18 +58,12 @@ const PhotoSurface = ({
         <span className="text-[11px] font-semibold tracking-[0.18em] text-[#8b7a63]">NO IMAGE</span>
       </div>
     )}
-    {/* light falling across the print */}
-    <div
-      className="pointer-events-none absolute inset-0"
-      style={{
-        background:
-          'linear-gradient(148deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.04) 34%, rgba(60,38,16,0.06) 78%, rgba(60,38,16,0.14) 100%)',
-      }}
-    />
-    <div
-      className="pointer-events-none absolute inset-0"
-      style={{ boxShadow: 'inset 0 0 1px rgba(40,24,10,0.5), inset 0 2px 6px rgba(40,24,10,0.16)' }}
-    />
+    {/* The room's light, falling across the print. Fixed at 148 degrees until
+        the room around it became a real one — now it runs down `--cast-deg`,
+        so the sheen moves off the paper as you walk past it. */}
+    <div className="print-light pointer-events-none absolute inset-0" />
+    {/* and the gap under the near edge, which the light does not get into */}
+    <div className="item-contact pointer-events-none absolute inset-0" />
   </div>
 );
 
