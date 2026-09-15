@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { quality, texSize } from './quality';
+import { detail, quality, texSize } from './quality';
 
 /**
  * Every surface in the room, drawn once into a canvas.
@@ -26,12 +26,24 @@ const cache = new Map<string, THREE.Texture>();
  * quarters the upload, quarters the memory, and quarters the bandwidth every
  * sample of it costs for the rest of the session. All the sizes are powers of
  * two, so they stay that way after stepping and keep their mipmaps.
+ *
+ * `willReadFrequently` asks for the software backend, and is worth asking for
+ * twice over. Half of these canvases are height fields that
+ * `heightToNormal` reads straight back out, and reading a GPU-backed canvas
+ * means a stall while the driver flushes everything queued against it and
+ * copies it back across the bus — the single worst thing to do on a tiled
+ * mobile GPU, where that bus is the thing the whole architecture exists to
+ * avoid crossing. The other half is that these draws are not what GPU canvas
+ * is good at: tens of thousands of one-pixel `fillRect`s are all per-call
+ * overhead and no fill, and the software backend draws them faster than the
+ * hardware one does. Measured on a fast desktop, asking for it took the
+ * concrete wall from 59ms to 33ms; the gap is wider on a phone.
  */
 function canvas(base: number, draw: (ctx: CanvasRenderingContext2D, s: number) => void, limit = 2) {
   const size = texSize(base, limit);
   const c = document.createElement('canvas');
   c.width = c.height = size;
-  const ctx = c.getContext('2d')!;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
   /* Drawn in the authored coordinate space and scaled on the way in, so a
      smaller texture is the same surface at lower resolution rather than the
      same pixels showing a quarter of it. */
@@ -60,7 +72,7 @@ function sheet(
   const c = document.createElement('canvas');
   c.width = cw;
   c.height = Math.round(h * (cw / w));
-  const ctx = c.getContext('2d')!;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
   if (cw !== w) ctx.scale(cw / w, cw / w);
   draw(ctx, w, h);
   return c;
@@ -129,20 +141,47 @@ function heightToNormal(src: HTMLCanvasElement, strength: number) {
   const out = document.createElement('canvas');
   out.width = w;
   out.height = h;
-  const ctx = out.getContext('2d')!;
+  const ctx = out.getContext('2d', { willReadFrequently: true })!;
   const img = ctx.createImageData(w, h);
-  const at = (x: number, y: number) => from[(((y + h) % h) * w + ((x + w) % w)) * 4] / 255;
+  const to = img.data;
+
+  /*
+   * The wrap, worked out once per column instead of twice per sample.
+   *
+   * These textures tile, so the differencing has to come round the edges or
+   * every surface in the room gets a seam down it — but the version that
+   * wrote that as `(x + w) % w` inside a helper paid for it everywhere, four
+   * samples a pixel, to get a different answer on two of them. Two integer
+   * divisions per sample is not much on a desktop and is real money on an
+   * in-order mobile core, and this is a quarter of a million pixels.
+   *
+   * `Math.hypot` went the same way. It is variadic and carefully guarded
+   * against overflow, neither of which V8 can optimise away and neither of
+   * which is wanted here: the slopes are bounded by `strength`, a small
+   * single-digit number. The plain square root gives byte-for-byte the same
+   * image and the pair together roughly halve the pass.
+   */
+  const left = new Int32Array(w);
+  const right = new Int32Array(w);
+  for (let x = 0; x < w; x++) {
+    left[x] = (x === 0 ? w - 1 : x - 1) * 4;
+    right[x] = (x === w - 1 ? 0 : x + 1) * 4;
+  }
 
   for (let y = 0; y < h; y++) {
+    const row = y * w * 4;
+    const up = (y === 0 ? h - 1 : y - 1) * w * 4;
+    const down = (y === h - 1 ? 0 : y + 1) * w * 4;
     for (let x = 0; x < w; x++) {
-      const dx = (at(x + 1, y) - at(x - 1, y)) * strength;
-      const dy = (at(x, y + 1) - at(x, y - 1)) * strength;
-      const len = Math.hypot(dx, dy, 1);
-      const i = (y * w + x) * 4;
-      img.data[i] = ((-dx / len) * 0.5 + 0.5) * 255;
-      img.data[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255;
-      img.data[i + 2] = (1 / len) * 0.5 * 255 + 127.5;
-      img.data[i + 3] = 255;
+      const x4 = x * 4;
+      const dx = ((from[row + right[x]] - from[row + left[x]]) / 255) * strength;
+      const dy = ((from[down + x4] - from[up + x4]) / 255) * strength;
+      const len = Math.sqrt(dx * dx + dy * dy + 1);
+      const i = row + x4;
+      to[i] = ((-dx / len) * 0.5 + 0.5) * 255;
+      to[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255;
+      to[i + 2] = (1 / len) * 0.5 * 255 + 127.5;
+      to[i + 3] = 255;
     }
   }
   ctx.putImageData(img, 0, 0);
@@ -164,7 +203,7 @@ function oakHeight(seed: number, size = 1024) {
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, s, s);
 
-    for (let i = 0; i < 190; i++) {
+    for (let i = 0, n = detail(190); i < n; i++) {
       const y = rnd() * s;
       const amp = (rnd() > 0.72 ? 1 : 0.3) * (4 + rnd() * 34);
       const dark = rnd() > 0.42;
@@ -184,7 +223,7 @@ function oakHeight(seed: number, size = 1024) {
     // open pores, the thing that separates oak from a painted stripe
     ctx.globalAlpha = 0.5;
     ctx.fillStyle = '#3e3e3e';
-    for (let i = 0; i < 2600; i++) {
+    for (let i = 0, n = detail(2600); i < n; i++) {
       const x = rnd() * s;
       const y = rnd() * s;
       ctx.fillRect(x, y, 1 + rnd() * 5, 1);
@@ -256,7 +295,7 @@ export function plaster(): Maps {
         ctx.fillStyle = g;
         ctx.fillRect(0, 0, s, s);
       }
-      for (let i = 0; i < 26000; i++) {
+      for (let i = 0, n = detail(26000); i < n; i++) {
         const v = rnd() > 0.5 ? 255 : 0;
         ctx.fillStyle = `rgba(${v},${v},${v},${0.05 + rnd() * 0.09})`;
         ctx.fillRect(rnd() * s, rnd() * s, 1 + rnd(), 1 + rnd());
@@ -308,7 +347,7 @@ export function concrete(): Maps {
       ctx.globalAlpha = 1;
 
       // fine aggregate, and the odd air pocket a wall never quite loses
-      for (let i = 0; i < 42000; i++) {
+      for (let i = 0, n = detail(42000); i < n; i++) {
         const v = rnd() > 0.5 ? 255 : 0;
         ctx.fillStyle = `rgba(${v},${v},${v},${0.04 + rnd() * 0.1})`;
         ctx.fillRect(rnd() * s, rnd() * s, 1 + rnd() * 1.6, 1 + rnd());
@@ -372,7 +411,7 @@ export function fabric(): Maps {
           ctx.fillRect(x, y, 4, 4);
         }
       }
-      for (let i = 0; i < 12000; i++) {
+      for (let i = 0, n = detail(12000); i < n; i++) {
         const v = rnd() > 0.5 ? 255 : 0;
         ctx.fillStyle = `rgba(${v},${v},${v},0.1)`;
         ctx.fillRect(rnd() * s, rnd() * s, 1, 1);
@@ -451,7 +490,7 @@ export function cork(): Maps {
     }
     // the dark seams and pits between the granules, which are most of what
     // keeps it from going flat and pale
-    for (let i = 0; i < 2600; i++) {
+    for (let i = 0, n = detail(2600, 1); i < n; i++) {
       seams.push([rnd() * size, rnd() * size, (0.5 + rnd() * 1.5) * 1.15, 0.2 + rnd() * 0.34]);
     }
     // old pin holes, left behind by everything that used to hang here
@@ -537,7 +576,7 @@ export function weave(): Maps {
         }
       }
       ctx.globalAlpha = 0.35;
-      for (let i = 0; i < 9000; i++) {
+      for (let i = 0, n = detail(9000); i < n; i++) {
         const v = rnd() > 0.5 ? 255 : 0;
         ctx.fillStyle = `rgb(${v},${v},${v})`;
         ctx.fillRect(rnd() * s, rnd() * s, 1, 1);
@@ -560,7 +599,7 @@ export function paper(): Maps {
     const h = canvas(256, (ctx, s) => {
       ctx.fillStyle = '#808080';
       ctx.fillRect(0, 0, s, s);
-      for (let i = 0; i < 9000; i++) {
+      for (let i = 0, n = detail(9000); i < n; i++) {
         const v = rnd() > 0.5 ? 255 : 0;
         ctx.fillStyle = `rgba(${v},${v},${v},0.16)`;
         ctx.fillRect(rnd() * s, rnd() * s, 1 + rnd() * 3, 1);
@@ -569,6 +608,90 @@ export function paper(): Maps {
     cache.set(`${ck}:n`, tex(heightToNormal(h, 1.1), 4, false));
   }
   return { normalMap: cache.get(`${ck}:n`) };
+}
+
+/* --------------------------------------------------------------- rubbish */
+
+/**
+ * Bin-liner plastic.
+ *
+ * The thing that gives a bag away as a sphere is the highlight: one broad,
+ * unbroken smear sliding across it. Real polythene has been stretched over
+ * whatever is inside it and creased everywhere it was gathered, and every one
+ * of those creases cuts the highlight into pieces — so this is mostly a
+ * crease field. They are drawn as short kinked strokes rather than curves
+ * because plastic folds along a line and holds it, and the roughness band is
+ * wide and low: the flats stay near-glossy, the creases go dull.
+ */
+export function crinkle(): Maps {
+  const ck = 'crinkle';
+  if (!cache.has(`${ck}:n`)) {
+    const rnd = rng(4707);
+    const h = canvas(256, (ctx, s) => {
+      ctx.fillStyle = '#808080';
+      ctx.fillRect(0, 0, s, s);
+      ctx.lineCap = 'round';
+      for (let i = 0, n = detail(300); i < n; i++) {
+        const x = rnd() * s;
+        const y = rnd() * s;
+        const a = rnd() * Math.PI * 2;
+        const len = s * (0.04 + rnd() * 0.22);
+        const kink = (rnd() - 0.5) * 1.1;
+        const v = rnd() > 0.5 ? 210 : 88;
+        ctx.strokeStyle = `rgba(${v},${v},${v},${0.22 + rnd() * 0.3})`;
+        ctx.lineWidth = 0.6 + rnd() * 1.8;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * len * 0.55, y + Math.sin(a) * len * 0.55);
+        ctx.lineTo(x + Math.cos(a + kink) * len, y + Math.sin(a + kink) * len);
+        ctx.stroke();
+      }
+      // the grain of the film itself, under the folds
+      for (let i = 0, n = detail(5000); i < n; i++) {
+        const v = rnd() > 0.5 ? 255 : 0;
+        ctx.fillStyle = `rgba(${v},${v},${v},0.06)`;
+        ctx.fillRect(rnd() * s, rnd() * s, 1, 1);
+      }
+    });
+    cache.set(`${ck}:n`, tex(heightToNormal(h, 1.6), 5, false));
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.4, 0.86), 5, false));
+  }
+  return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
+}
+
+/**
+ * The mark a pile of rubbish leaves on the pavement it has been sitting on.
+ *
+ * An alpha mask rather than a colour: it is laid over whatever the ground
+ * already is, so the concrete keeps its own grain and only loses its light.
+ * Soft-edged, off-centre and lumpy, because a clean ellipse of dirt reads as
+ * a shadow the renderer forgot to draw.
+ */
+export function grime(): THREE.Texture {
+  const ck = 'grime';
+  if (!cache.has(ck)) {
+    const rnd = rng(8812);
+    const c = canvas(256, (ctx, s) => {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, s, s);
+      const blot = (x: number, y: number, r: number, a: number) => {
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(255,255,255,${a})`);
+        g.addColorStop(0.55, `rgba(255,255,255,${a * 0.42})`);
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, s, s);
+      };
+      blot(s * 0.5, s * 0.52, s * 0.44, 0.82);
+      for (let i = 0, n = detail(26, 1); i < n; i++) {
+        blot(s * (0.2 + rnd() * 0.6), s * (0.2 + rnd() * 0.6), s * (0.05 + rnd() * 0.2), 0.16 + rnd() * 0.3);
+      }
+    }, 1);
+    const t = tex(c, 1, false);
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    cache.set(ck, t);
+  }
+  return cache.get(ck)!;
 }
 
 /* ------------------------------------------------------------------ glass */
@@ -659,7 +782,7 @@ export function brushed(): Maps {
     const h = canvas(256, (ctx, s) => {
       ctx.fillStyle = '#8c8c8c';
       ctx.fillRect(0, 0, s, s);
-      for (let i = 0; i < 4200; i++) {
+      for (let i = 0, n = detail(4200); i < n; i++) {
         const y = rnd() * s;
         const len = 20 + rnd() * 210;
         const v = rnd() > 0.5 ? 255 : 0;
@@ -702,83 +825,63 @@ function clamped(t: THREE.Texture) {
  * sit in is the darkest. So the same layout runs through two palettes: greys
  * for the relief, and the real colours for the map.
  */
-interface Deck {
-  floor: string;
-  skirt: string;
-  cap: string;
-}
-
-function deckOf(p: Deck) {
-  return sheet(1024, 384, (ctx, w, d) => {
-    ctx.fillStyle = p.floor;
-    ctx.fillRect(0, 0, w, d);
-
-    const rr = (x: number, y: number, kw: number, kh: number, r: number, fill: string) => {
-      ctx.fillStyle = fill;
-      ctx.beginPath();
-      ctx.roundRect(x, y, kw, kh, r);
-      ctx.fill();
-    };
-
-    /* Two steps rather than one. A cap that goes from the floor of the well to
-       its full height in a single pixel comes out of the normal map as a wall;
-       the skirt is what makes it read as a chamfer you could run a fingernail
-       down. */
-    const cap = (x: number, y: number, kw: number, kh: number) => {
-      rr(x, y, kw, kh, 6, p.skirt);
-      rr(x + 2.5, y + 2.5, kw - 5, kh - 5, 4.5, p.cap);
-    };
-
-    /* The rows are relative widths, not pixels: a tab key is one and a half of
-       a letter key on every keyboard ever made, and the unit falls out of
-       whatever room the row has left once the gaps are taken out. The keys
-       fill the well, which is what puts a cap at sixteen millimetres across —
-       the one measurement on a keyboard that every hand already knows. */
-    const x0 = 24;
-    const span = 976;
-    const gap = 7;
-    const letters = (n: number) => Array<number>(n).fill(1);
-    const row = (y: number, kh: number, widths: number[], width = span) => {
-      const unit = (width - gap * (widths.length - 1)) / widths.reduce((a, b) => a + b, 0);
-      let x = x0;
-      for (const rel of widths) {
-        cap(x, y, unit * rel, kh);
-        x += unit * rel + gap;
-      }
-      return x;
-    };
-
-    row(12, 40, [1.6, ...letters(12), 1.6]);
-    row(58, 58, [...letters(13), 1.75]);
-    row(122, 58, [1.5, ...letters(12), 1.25]);
-    row(186, 58, [1.75, ...letters(11), 1.9]);
-    row(250, 58, [2.3, ...letters(10), 2.3]);
-    const end = row(314, 58, [1, 1, 1, 1.25, 5.4, 1.25, 1], span - 172);
-
-    // the inverted T, the one corner of a keyboard nobody has ever redrawn
-    const aw = (x0 + span - end - gap * 2) / 3;
-    cap(end, 314, aw, 58);
-    cap(end + aw + gap, 314, aw, 26);
-    cap(end + aw + gap, 346, aw, 26);
-    cap(end + (aw + gap) * 2, 314, aw, 58);
+/** Shared atlas coordinates keep the sculpted keycaps and legends aligned. */
+export const NERO_KEYS: Array<{ x: number; y: number; w: number; h: number; label: string }> = [];
+const neroRow = (y: number, h: number, labels: string[], widths: number[], span = 976) => {
+  const unit = (span - 7 * (labels.length - 1)) / widths.reduce((sum, w) => sum + w, 0);
+  let x = 24;
+  labels.forEach((label, i) => {
+    const w = widths[i] * unit;
+    NERO_KEYS.push({ x, y, w, h, label });
+    x += w + 7;
   });
-}
+  return x;
+};
+neroRow(12, 38, ['esc', '☀', '☼', '▣', '⌕', '◉', '☾', '◀', '▶', '▶▶', '⌁', '−', '+', '◯'], [1.5, ...Array(12).fill(1), 1.5]);
+neroRow(58, 56, ['~', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '−', '=', 'delete'], [...Array(13).fill(1), 1.6]);
+neroRow(122, 56, ['tab', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '[', ']', '\\'], [1.45, ...Array(12).fill(1), 1.15]);
+neroRow(186, 56, ['caps lock', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ';', "'", 'return'], [1.75, ...Array(11).fill(1), 1.85]);
+neroRow(250, 56, ['shift', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '/', 'shift'], [2.3, ...Array(10).fill(1), 2.3]);
+const arrowStart = neroRow(314, 56, ['fn', 'control', 'option', '⌘', '', '⌘', 'option'], [1, 1, 1, 1.2, 5.4, 1.2, 1], 798);
+const arrowW = (1000 - arrowStart - 14) / 3;
+NERO_KEYS.push(
+  { x: arrowStart, y: 344, w: arrowW, h: 26, label: '◀' },
+  { x: arrowStart + arrowW + 7, y: 314, w: arrowW, h: 26, label: '▲' },
+  { x: arrowStart + arrowW + 7, y: 344, w: arrowW, h: 26, label: '▼' },
+  { x: arrowStart + (arrowW + 7) * 2, y: 344, w: arrowW, h: 26, label: '▶' },
+);
 
 export function keyboard(): Maps {
   const ck = 'keyboard';
   if (!cache.has(ck)) {
-    const relief = deckOf({ floor: '#232323', skirt: '#8e8e8e', cap: '#e9e9e9' });
-    const colour = deckOf({ floor: '#33342e', skirt: '#b9b7ab', cap: '#eceade' });
+    const colour = sheet(2048, 768, (ctx) => {
+      ctx.scale(2, 2);
+      ctx.fillStyle = '#dadbd7';
+      ctx.fillRect(0, 0, 1024, 384);
+      for (const key of NERO_KEYS) {
+        const { x, y, w, h, label } = key;
+        const cap = ctx.createLinearGradient(x, y, x, y + h);
+        cap.addColorStop(0, '#ffffff');
+        cap.addColorStop(0.55, '#f1f2ee');
+        cap.addColorStop(1, '#e2e4dd');
+        ctx.fillStyle = cap;
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, 6);
+        ctx.fill();
+        ctx.fillStyle = '#444943';
+        ctx.font = `${label.length > 2 ? 10 : 16}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.textAlign = label.length > 2 ? 'left' : 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, label.length > 2 ? x + 7 : x + w / 2, y + h / 2, w - 10);
+        if (label === 'F' || label === 'J') {
+          ctx.fillStyle = '#b0b5ac';
+          ctx.fillRect(x + w / 2 - 6, y + h - 9, 12, 1.5);
+        }
+      }
+    });
     cache.set(ck, clamped(tex(colour, 1, true)));
-    cache.set(`${ck}:n`, clamped(tex(heightToNormal(relief, 1.5), 1, false)));
-    // moulded plastic: matt on the caps, a shade less so down in the gaps
-    if (wantRoughness()) cache.set(`${ck}:r`, clamped(tex(levels(relief, 0.52, 0.84), 1, false)));
   }
-  return {
-    map: cache.get(ck),
-    normalMap: cache.get(`${ck}:n`),
-    roughnessMap: cache.get(`${ck}:r`),
-  };
+  return { map: cache.get(ck) };
 }
 
 /**
@@ -868,18 +971,14 @@ export function screen(): Maps {
       ctx.fillRect(x0, y0, sw, sh);
       ctx.restore();
 
-      // the notch, and the camera that is the reason for it
-      ctx.fillStyle = bezel;
+      // A small webcam in the continuous top bezel, without a notch.
+      ctx.fillStyle = '#0b0d10';
       ctx.beginPath();
-      ctx.roundRect((w - 164) / 2, 0, 164, y0 + 26, [0, 0, 9, 9]);
+      ctx.arc(w / 2, 13, 5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#15171a';
+      ctx.fillStyle = '#365265';
       ctx.beginPath();
-      ctx.arc(w / 2, y0 + 1, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(150,168,186,0.5)';
-      ctx.beginPath();
-      ctx.arc(w / 2 - 1.6, y0 - 1, 1.8, 0, Math.PI * 2);
+      ctx.arc(w / 2 - 1, 12, 1.7, 0, Math.PI * 2);
       ctx.fill();
 
       // and the name of the thing, etched into the chin
@@ -913,7 +1012,25 @@ export function screen(): Maps {
  * near a millimetre, invisible across the room and there when you lean in,
  * exactly as it is on the real thing.
  */
-export function anodised(): Maps {
+export function anodised(fine = false): Maps {
+  if (fine) {
+    const ck = 'anodised-fine';
+    if (!cache.has(`${ck}:n`)) {
+      const rnd = rng(1976);
+      const grain = canvas(512, (ctx, size) => {
+        const pixels = ctx.createImageData(size, size);
+        for (let i = 0; i < pixels.data.length; i += 4) {
+          const v = 122 + Math.round(rnd() * 12);
+          pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = v;
+          pixels.data[i + 3] = 255;
+        }
+        ctx.putImageData(pixels, 0, 0);
+      });
+      cache.set(`${ck}:n`, tex(heightToNormal(grain, 0.22), 1 / 160, false));
+      if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(grain, 0.84, 1), 1 / 160, false));
+    }
+    return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
+  }
   const ck = 'anodised';
   if (!cache.has(`${ck}:n`)) {
     const rnd = rng(1959);
@@ -943,12 +1060,12 @@ export function anodised(): Maps {
       ctx.filter = 'none';
 
       // and the blasting: fine everywhere, with the odd deeper pit in it
-      for (let i = 0; i < 16000; i++) {
+      for (let i = 0, n = detail(16000); i < n; i++) {
         const v = rnd() > 0.5 ? 255 : 0;
         ctx.fillStyle = `rgba(${v},${v},${v},${0.04 + rnd() * 0.14})`;
         ctx.fillRect(rnd() * s, rnd() * s, 1, 1);
       }
-      for (let i = 0; i < 900; i++) {
+      for (let i = 0, n = detail(900); i < n; i++) {
         ctx.fillStyle = `rgba(0,0,0,${0.05 + rnd() * 0.1})`;
         ctx.fillRect(rnd() * s, rnd() * s, 2, 2);
       }
@@ -983,8 +1100,8 @@ export function softTouch(): Maps {
       ctx.fillStyle = '#8a8a8a';
       ctx.fillRect(0, 0, s, s);
       // a moulded pebble: overlapping soft dimples rather than sharp pitting
-      for (let i = 0; i < 5200; i++) {
-        const r = 1.4 + rnd() * 2.6;
+      for (let i = 0, n = detail(5200); i < n; i++) {
+        const r = 0.65 + rnd() * 1.15;
         const v = rnd() > 0.5 ? 235 : 30;
         ctx.fillStyle = `rgba(${v},${v},${v},${0.05 + rnd() * 0.09})`;
         ctx.beginPath();
@@ -992,138 +1109,61 @@ export function softTouch(): Maps {
         ctx.fill();
       }
     });
-    cache.set(`${ck}:n`, tex(heightToNormal(h, 0.5), 1 / 620, false));
-    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.82, 1), 1 / 620, false));
+    cache.set(`${ck}:n`, tex(heightToNormal(h, 0.28), 1 / 240, false));
+    if (wantRoughness()) cache.set(`${ck}:r`, tex(levels(h, 0.86, 1), 1 / 240, false));
   }
   return { normalMap: cache.get(`${ck}:n`), roughnessMap: cache.get(`${ck}:r`) };
 }
 
 /* ------------------------------------------------------------ the other one */
 
-/**
- * The Tinkerbel's deck: keys that smile, a red dot, and three buttons.
- *
- * Every recognisable thing about this keyboard is something the other one does
- * not have. The caps are scooped along the bottom edge — a bigger radius on
- * the two lower corners and nothing else, which at this size is the whole of
- * it. There is a red nub in the middle of the letters, where the index fingers
- * of a certain generation still reach for it. And underneath, where the other
- * machine has bare palm rest, there are three buttons, because the pointing
- * device this keyboard was designed around needs somewhere to click.
- *
- * The nub is the reason this is inked twice rather than tinted from its own
- * relief, the way the wood in this file is. It is the one part of the surface
- * whose colour is not a function of its depth: a bump like any other bump, in
- * the one colour nobody would guess from looking at a height field.
- */
-interface ThinkDeck {
-  floor: string;
-  skirt: string;
-  cap: string;
-  button: string;
-  nub: string;
-  stripe: string;
-}
-
-function thinkDeckOf(p: ThinkDeck) {
-  return sheet(1024, 444, (ctx, w, d) => {
-    ctx.fillStyle = p.floor;
-    ctx.fillRect(0, 0, w, d);
-
-    const rr = (x: number, y: number, kw: number, kh: number, r: number | number[], fill: string) => {
-      ctx.fillStyle = fill;
-      ctx.beginPath();
-      ctx.roundRect(x, y, kw, kh, r as number[]);
-      ctx.fill();
-    };
-
-    /* Square at the top, scooped at the bottom. One array of corner radii is
-       the difference between this keyboard and every other keyboard. */
-    const cap = (x: number, y: number, kw: number, kh: number) => {
-      rr(x, y, kw, kh, [4, 4, 10, 10], p.skirt);
-      rr(x + 2, y + 2, kw - 4, kh - 4.5, [3, 3, 8.5, 8.5], p.cap);
-    };
-
-    const x0 = 14;
-    const span = 996;
-    const gap = 6;
-    const letters = (n: number) => Array<number>(n).fill(1);
-    const row = (y: number, kh: number, widths: number[], width = span) => {
-      const unit = (width - gap * (widths.length - 1)) / widths.reduce((a, b) => a + b, 0);
-      let x = x0;
-      for (const rel of widths) {
-        cap(x, y, unit * rel, kh);
-        x += unit * rel + gap;
-      }
-      return x;
-    };
-
-    row(8, 42, [1.3, ...letters(12), 1.3]);
-    row(54, 52, [...letters(13), 1.9]);
-    row(110, 52, [1.5, ...letters(12), 1.25]);
-    row(166, 52, [1.8, ...letters(11), 1.95]);
-    row(222, 52, [2.35, ...letters(10), 2.35]);
-    const end = row(278, 52, [1, 1, 1, 1.3, 5.6, 1.3, 1], span - 168);
-
-    // the inverted T, with the page keys stacked either side of the up arrow
-    const aw = (x0 + span - end - gap * 2) / 3;
-    cap(end, 278, aw, 52);
-    cap(end + aw + gap, 278, aw, 23);
-    cap(end + aw + gap, 307, aw, 23);
-    cap(end + (aw + gap) * 2, 278, aw, 52);
-
-    /* The nub, sitting in the gap between the two middle rows where G, H and B
-       meet — which is where it has been on every one of these for thirty odd
-       years, and the one place a finger goes looking for it. */
-    ctx.fillStyle = p.nub;
-    ctx.beginPath();
-    ctx.roundRect(486, 206, 30, 30, 9);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';
-    for (let i = 0; i < 4; i++) {
-      ctx.fillRect(490, 212 + i * 6, 22, 2);
-    }
-
-    // and the three buttons it clicks with, the middle one marked
-    const bw = 540;
-    const bx = 501 - bw / 2;
-    const by = 348;
-    const bh = 80;
-    const thirds = [190, 156, 190];
-    let cx = bx;
-    thirds.forEach((tw, i) => {
-      rr(cx, by, tw, bh, [7, 7, 9, 9], p.skirt);
-      rr(cx + 2, by + 2, tw - 4, bh - 4, [6, 6, 8, 8], p.button);
-      if (i === 1) {
-        ctx.fillStyle = p.stripe;
-        ctx.fillRect(cx + 16, by + 7, tw - 32, 5);
-      }
-      cx += tw + 7;
-    });
-  });
-}
+/** A separate atlas for the Tinkerbel's dark, dished keyboard. */
+export const THINK_KEYS = NERO_KEYS.map((key, index) => ({
+  ...key,
+  x: 14 + (key.x - 24) * (996 / 976),
+  y: 8 + (key.y - 12) * 0.86,
+  w: key.w * (996 / 976),
+  h: key.h * 0.86,
+  label: index > 0 && index < 13 ? `F${index}` : key.label === '⌘' ? 'alt' : key.label === 'option' ? 'ctrl' : key.label,
+}));
 
 export function thinkDeck(): Maps {
   const ck = 'think-deck';
   if (!cache.has(ck)) {
-    const relief = thinkDeckOf({
-      floor: '#1f1f1f', skirt: '#8b8b8b', cap: '#e4e4e4',
-      button: '#cfcfcf', nub: '#f0f0f0', stripe: '#6a6a6a',
-    });
-    const colour = thinkDeckOf({
-      floor: '#141416', skirt: '#2a2a2c', cap: '#37373a',
-      button: '#2f2f32', nub: '#c0392b', stripe: '#d9452f',
+    const colour = sheet(2048, 888, (ctx) => {
+      ctx.scale(2, 2);
+      ctx.fillStyle = '#111215';
+      ctx.fillRect(0, 0, 1024, 444);
+      for (const { x, y, w, h, label } of THINK_KEYS) {
+        const cap = ctx.createLinearGradient(x, y, x, y + h);
+        cap.addColorStop(0, '#44464b');
+        cap.addColorStop(0.32, '#303237');
+        cap.addColorStop(0.7, '#282a2e');
+        cap.addColorStop(1, '#3a3c40');
+        ctx.fillStyle = cap;
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, [3, 3, 8, 8]);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(188,193,203,0.18)';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(x + 5, y + 2);
+        ctx.lineTo(x + w - 5, y + 2);
+        ctx.stroke();
+        ctx.fillStyle = label === 'fn' ? '#8cb5db' : '#eef0f2';
+        ctx.font = `${label.length > 2 ? 10 : 16}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.textAlign = label.length > 2 ? 'left' : 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, label.length > 2 ? x + 6 : x + w / 2, y + h / 2, w - 10);
+        if (label === 'F' || label === 'J') {
+          ctx.fillStyle = '#92959b';
+          ctx.fillRect(x + w / 2 - 6, y + h - 7, 12, 1.4);
+        }
+      }
     });
     cache.set(ck, clamped(tex(colour, 1, true)));
-    cache.set(`${ck}:n`, clamped(tex(heightToNormal(relief, 1.6), 1, false)));
-    // moulded plastic, and matt with it — these were never meant to shine
-    if (wantRoughness()) cache.set(`${ck}:r`, clamped(tex(levels(relief, 0.62, 0.92), 1, false)));
   }
-  return {
-    map: cache.get(ck),
-    normalMap: cache.get(`${ck}:n`),
-    roughnessMap: cache.get(`${ck}:r`),
-  };
+  return { map: cache.get(ck) };
 }
 
 /**
@@ -1261,26 +1301,30 @@ export function thinkScreen(): Maps {
  * extrusion and its UVs are in the units it was drawn in — fine for a grain
  * that tiles, useless for a word that has to land in one place at one size.
  */
-export function tinkerMark(): THREE.Texture {
-  const ck = 'tinker-mark';
+export function tinkerMark(dark = false): THREE.Texture {
+  const ck = dark ? 'tinker-mark-dark' : 'tinker-mark';
   if (!cache.has(ck)) {
     const c = sheet(512, 128, (ctx, w, h) => {
       ctx.clearRect(0, 0, w, h);
-      ctx.font = '800 74px ui-sans-serif, system-ui, sans-serif';
-      ctx.textBaseline = 'middle';
+      // A compact, slightly slanted wordmark with a precisely placed red i dot.
+      ctx.font = 'italic 800 76px Arial, sans-serif';
+      ctx.textBaseline = 'alphabetic';
       ctx.textAlign = 'left';
-      ctx.fillStyle = '#e9e6e0';
-      ctx.fillText('TinkerBel', 6, h / 2 + 4);
-      /* The dot over the i, which on one of these is a light that tells you it
-         is awake. Measured rather than guessed: the glyph it sits on is the
-         second one, so where it lands is the width of the first plus half the
-         width of its own. */
-      const t = ctx.measureText('T').width;
-      const i = ctx.measureText('i').width;
-      ctx.fillStyle = '#d9452f';
+      ctx.fillStyle = dark ? '#282a2e' : '#e9e9e7';
+      const x = 12;
+      const baseline = 88;
+      ctx.fillText('TinkerBel', x, baseline);
+      const dotX = x + ctx.measureText('T').width + ctx.measureText('i').width * 0.68;
+      ctx.clearRect(dotX - 9, baseline - 60, 18, 17);
+      ctx.fillStyle = '#dc342f';
       ctx.beginPath();
-      ctx.arc(6 + t + i / 2, h / 2 - 27, 8, 0, Math.PI * 2);
+      ctx.arc(dotX, baseline - 53, 6.5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.font = '600 13px Arial, sans-serif';
+      ctx.letterSpacing = '3px';
+      ctx.fillStyle = dark ? '#5c5e60' : '#93969c';
+      ctx.fillText('LEVONA  /  TB14', x + 5, 115);
+      ctx.letterSpacing = '0px';
     }, 0);
     cache.set(ck, clamped(tex(c, 1, true)));
   }
@@ -1289,173 +1333,123 @@ export function tinkerMark(): THREE.Texture {
 
 /* ------------------------------------------------------------------ phone */
 
-/**
- * The back of the handset: pearl over a facet.
- *
- * The finish these are sold on is not a colour, it is a disagreement between
- * two of them. A pale coating over a brushed substrate throws warm one way and
- * cool the other, and the fold between them moves as the thing turns — which
- * is why the press shots are always at an angle and never flat on. None of
- * that survives being painted as a tint, so it is painted as geometry instead:
- * broad facets with gradients running across them, and the two ghosts of
- * colour laid along the seams where the facets meet.
- */
-export function pearl(): Maps {
-  const ck = 'pearl';
+/** Warm titanium beneath glass, with sharp folded facets and cool edge glints. */
+export function pearl(neutral = false): Maps {
+  const ck = neutral ? 'pearl-neutral' : 'pearl';
   if (!cache.has(ck)) {
     const face = sheet(512, 1024, (ctx, w, h) => {
-      ctx.fillStyle = '#eae8e3';
+      const base = ctx.createLinearGradient(0, 0, w, h);
+      base.addColorStop(0, '#c1bcb4');
+      base.addColorStop(0.45, '#a59e94');
+      base.addColorStop(1, '#777168');
+      ctx.fillStyle = base;
       ctx.fillRect(0, 0, w, h);
-
-      /* Facets, as long wedges out of the corners. Each one a gradient along
-         its own axis, so the panel has somewhere for the light to break. */
-      const facets: Array<[number[], string, string, number]> = [
-        [[0, 0, 1, 0, 1, 0.42, 0, 0.24], '#ffffff', '#dcdad4', 0.85],
-        [[0, 0.24, 1, 0.42, 1, 0.74, 0, 0.58], '#f4f2ed', '#cfccc5', 0.7],
-        [[0, 0.58, 1, 0.74, 1, 1, 0, 1], '#ffffff', '#d6d3cc', 0.8],
+      const facets: Array<[number[], string, string]> = [
+        [[0, 0.12, 1, 0.29, 0.62, 0.36], '#c9c5bf', '#8b867e'],
+        [[1, 0.29, 0.62, 0.36, 1, 0.54], '#e1ddd7', '#99938b'],
+        [[0, 0.57, 0.93, 0.86, 0.25, 0.88], '#868178', '#bcb7ae'],
+        [[0, 0.57, 0.93, 0.86, 0.56, 1, 0, 1], '#aaa49a', '#69655f'],
+        [[0.93, 0.86, 1, 0.9, 1, 1, 0.56, 1], '#b5b0a7', '#827b72'],
       ];
-      for (const [pts, from, to, alpha] of facets) {
-        const g = ctx.createLinearGradient(0, 0, w, h * 0.6);
-        g.addColorStop(0, from);
-        g.addColorStop(1, to);
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = g;
+      for (const [points, from, to] of facets) {
+        const gradient = ctx.createLinearGradient(0, h * points[1], w, h * points[points.length - 1]);
+        gradient.addColorStop(0, from);
+        gradient.addColorStop(1, to);
+        ctx.fillStyle = gradient;
         ctx.beginPath();
-        ctx.moveTo(pts[0] * w, pts[1] * h);
-        for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i] * w, pts[i + 1] * h);
+        ctx.moveTo(points[0] * w, points[1] * h);
+        for (let i = 2; i < points.length; i += 2) ctx.lineTo(points[i] * w, points[i + 1] * h);
         ctx.closePath();
         ctx.fill();
       }
-      ctx.globalAlpha = 1;
-
-      // the two ghosts, along the seams: one warm, one cold, neither of them loud
-      ctx.filter = 'blur(9px)';
-      for (const [y, tint, a] of [[0.3, '#e8a79b', 0.5], [0.66, '#9fd4de', 0.42]] as [number, string, number][]) {
-        ctx.globalAlpha = a;
-        ctx.fillStyle = tint;
+      // Thin spectral seams stay sharp, like the reference's glass reflections.
+      for (const [x1, y1, x2, y2] of [[0.68, 0.04, 1, 0.18], [0.64, 0.35, 1, 0.29], [0, 0.57, 0.93, 0.86]]) {
+        const line = ctx.createLinearGradient(x1 * w, y1 * h, x2 * w, y2 * h);
+        line.addColorStop(0, 'rgba(231,230,221,0.25)');
+        line.addColorStop(0.55, 'rgba(169,219,237,0.8)');
+        line.addColorStop(1, 'rgba(218,228,231,0.1)');
+        ctx.strokeStyle = line;
+        ctx.lineWidth = 1.6;
         ctx.beginPath();
-        ctx.moveTo(0, h * y);
-        ctx.lineTo(w, h * (y + 0.11));
-        ctx.lineTo(w, h * (y + 0.14));
-        ctx.lineTo(0, h * (y + 0.03));
-        ctx.closePath();
-        ctx.fill();
+        ctx.moveTo(x1 * w, y1 * h);
+        ctx.lineTo(x2 * w, y2 * h);
+        ctx.stroke();
       }
-      ctx.filter = 'none';
-      ctx.globalAlpha = 1;
-
-      // the flash, off to one side of where the camera goes
-      ctx.fillStyle = '#d9d6cf';
-      ctx.beginPath();
-      ctx.roundRect(w * 0.76, h * 0.075, 52, 52, 17);
-      ctx.fill();
-      ctx.fillStyle = '#f7f3e2';
-      ctx.beginPath();
-      ctx.arc(w * 0.76 + 26, h * 0.075 + 26, 16, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(150,150,150,0.5)';
-      ctx.beginPath();
-      ctx.arc(w * 0.76 + 26, h * 0.075 + 26, 7, 0, Math.PI * 2);
-      ctx.fill();
-
-      // and the name, etched where a name goes
-      ctx.fillStyle = 'rgba(120,118,112,0.45)';
-      ctx.font = '600 26px ui-sans-serif, system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.letterSpacing = '3px';
-      ctx.fillText('fujiPhone', w / 2, h * 0.93);
-      ctx.letterSpacing = '0px';
     });
-
+    if (neutral) {
+      // A neutral bright substrate keeps white white and avoids muddy color tints.
+      const context = face.getContext('2d')!;
+      const pixels = context.getImageData(0, 0, face.width, face.height);
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        const luminance = pixels.data[i] * 0.2126 + pixels.data[i + 1] * 0.7152 + pixels.data[i + 2] * 0.0722;
+        const value = Math.min(255, 184 + (luminance - 100) * 0.56);
+        pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = value;
+      }
+      context.putImageData(pixels, 0, 0);
+    }
     cache.set(ck, clamped(tex(face, 1, true)));
   }
   return { map: cache.get(ck) };
 }
 
-/**
- * The camera plateau, looked straight down on.
- *
- * Three wells, a knurled field and a number nobody believes. Painted rather
- * than turned out of cylinders for the same reason the keys are painted: at
- * the size a phone sits on a counter, a lens barrel is four pixels of rim
- * around six of glass, and four pixels of rim drawn is sharper than four
- * pixels of rim modelled — and costs a hundred and fifty vertices less.
- */
+/** Unbranded machined insert. Lens silhouettes belong to the model. */
 export function lenses(): Maps {
   const ck = 'lenses';
   if (!cache.has(ck)) {
     const face = sheet(512, 512, (ctx, w, h) => {
-      ctx.fillStyle = '#e4e2dc';
+      ctx.fillStyle = '#938d83';
       ctx.fillRect(0, 0, w, h);
-
-      /* Knurling. Two sets of hairlines crossing at right angles is the whole
-         of it — machined diamonds are just what a lathe leaves behind. */
-      ctx.strokeStyle = 'rgba(120,118,112,0.3)';
-      ctx.lineWidth = 1;
-      for (let d = -w; d < w * 2; d += 7) {
-        ctx.beginPath();
-        ctx.moveTo(d, 0);
-        ctx.lineTo(d + h, h);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(d, h);
-        ctx.lineTo(d + h, 0);
-        ctx.stroke();
+      // Each diamond has a lit and shaded face, rather than a flat crosshatch.
+      const pitch = 8;
+      for (let y = -pitch; y < h + pitch; y += pitch) {
+        for (let x = -pitch; x < w + pitch; x += pitch) {
+          const cx = x + ((y / pitch) % 2 ? pitch / 2 : 0);
+          ctx.fillStyle = '#beb8ad';
+          ctx.beginPath();
+          ctx.moveTo(cx, y - 4);
+          ctx.lineTo(cx + 4, y);
+          ctx.lineTo(cx, y + 4);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = '#68645e';
+          ctx.beginPath();
+          ctx.moveTo(cx, y - 4);
+          ctx.lineTo(cx - 4, y);
+          ctx.lineTo(cx, y + 4);
+          ctx.closePath();
+          ctx.fill();
+        }
       }
-
-      const lens = (cx: number, cy: number, r: number) => {
-        // the raised ring the glass is set into
-        const rim = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
-        rim.addColorStop(0, '#ffffff');
-        rim.addColorStop(0.5, '#c9c6bf');
-        rim.addColorStop(1, '#f2efe9');
-        ctx.fillStyle = rim;
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = '#121316';
-        ctx.beginPath();
-        ctx.arc(cx, cy, r * 0.8, 0, Math.PI * 2);
-        ctx.fill();
-
-        // the element, which is the only part of a camera anybody can see
-        const eye = ctx.createRadialGradient(cx - r * 0.16, cy - r * 0.18, r * 0.02, cx, cy, r * 0.42);
-        eye.addColorStop(0, '#8fb6d8');
-        eye.addColorStop(0.35, '#2c4a68');
-        eye.addColorStop(1, '#0a0d12');
-        ctx.fillStyle = eye;
-        ctx.beginPath();
-        ctx.arc(cx, cy, r * 0.4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.beginPath();
-        ctx.ellipse(cx - r * 0.22, cy - r * 0.26, r * 0.1, r * 0.06, -0.6, 0, Math.PI * 2);
-        ctx.fill();
-      };
-
-      /* The triangle they are always in, and big: on the thing itself the
-         glass is most of the plateau, and lenses drawn politely small read as
-         a camera from ten years ago. */
-      lens(166, 152, 128);
-      lens(356, 286, 112);
-      lens(176, 382, 120);
-
-      ctx.fillStyle = '#c0392b';
-      ctx.beginPath();
-      ctx.arc(322, 84, 7, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#2f2e2b';
-      ctx.font = '800 32px ui-sans-serif, system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText('100X', 336, 95);
-      ctx.fillStyle = 'rgba(70,68,64,0.65)';
-      ctx.font = '600 15px ui-sans-serif, system-ui, sans-serif';
-      ctx.letterSpacing = '2px';
-      ctx.fillText('FUJI LENS', 336, 118);
-      ctx.letterSpacing = '0px';
     });
+    cache.set(ck, clamped(tex(face, 1, true)));
+  }
+  return { map: cache.get(ck) };
+}
 
+/** Optical coating shared by the three recessed glass discs. */
+export function lensGlass(): Maps {
+  const ck = 'lensGlass';
+  if (!cache.has(ck)) {
+    const face = sheet(256, 256, (ctx, w, h) => {
+      ctx.fillStyle = '#090c10';
+      ctx.fillRect(0, 0, w, h);
+      const eye = ctx.createRadialGradient(w * 0.46, h * 0.45, 2, w / 2, h / 2, w * 0.26);
+      eye.addColorStop(0, '#07121d');
+      eye.addColorStop(0.45, '#132b40');
+      eye.addColorStop(0.63, '#32333d');
+      eye.addColorStop(0.76, '#15151b');
+      eye.addColorStop(1, '#090c10');
+      ctx.fillStyle = eye;
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(186,215,240,0.8)';
+      ctx.beginPath();
+      ctx.ellipse(w * 0.42, h * 0.42, w * 0.045, h * 0.023, -0.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(150,183,156,0.5)';
+      ctx.beginPath();
+      ctx.ellipse(w * 0.58, h * 0.57, w * 0.022, h * 0.035, -0.6, 0, Math.PI * 2);
+      ctx.fill();
+    });
     cache.set(ck, clamped(tex(face, 1, true)));
   }
   return { map: cache.get(ck) };

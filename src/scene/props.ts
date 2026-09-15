@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { COUNTER } from './layout';
-import { foliage } from './parts';
+import { arc, foliage } from './parts';
 import { bakeLight, mergeStatic } from './bake';
 import { quality, texSize } from './quality';
 import type { PropPlacement } from '../lib/types';
-import { anodised, keyboard, lenses, oak, pearl, screen, softTouch, thinkDeck, thinkScreen, tinkerMark, weave } from './textures';
+import { anodised, keyboard, NERO_KEYS, THINK_KEYS, lensGlass, lenses, oak, pearl, screen, softTouch, thinkDeck, thinkScreen, tinkerMark, weave } from './textures';
+import { onPhonePaint, phoneFinish } from './phoneFinishes';
 import { finish, model, onPaint, onSwap, type Finish } from './models';
 
 /**
@@ -51,8 +52,20 @@ const bx = (w: number, h: number, d: number, m: THREE.Material, x = 0, y = 0, z 
   return mesh;
 };
 
+/**
+ * A turned thing: a mug, a pot, a vase, the foot of a lamp.
+ *
+ * Thinned on the machines that would rather not, the same way the room's own
+ * cylinders are. The rooms have gone through `arc` since they were written
+ * and the props never did, which left the nine things on the counter built to
+ * full detail on a phone that had just been handed a quarter-size wall — and
+ * they are not a rounding error next to the room, because each one is also
+ * traced and welded. Every segment taken off here comes off three times: the
+ * triangles, the vertices the bake has to find light for, and the vertices
+ * `knit` has to weld together afterwards.
+ */
 const cyl = (rt: number, rb: number, h: number, m: THREE.Material, seg = 20) =>
-  new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), m);
+  new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, arc(seg)), m);
 
 /* --------------------------------------------------------- rounded plates */
 
@@ -137,8 +150,8 @@ function slab(
  * one surface where that is wrong, since the picture has to land on it exactly
  * once. So these are put back to nought-and-one, the way a plane's are.
  */
-function panel(w: number, h: number, r: number, m: THREE.Material, mirror = false) {
-  const g = new THREE.ShapeGeometry(rounded(w, h, r), SEGMENTS);
+function panel(w: number, h: number, r: number, m: THREE.Material, mirror = false, segments = SEGMENTS) {
+  const g = new THREE.ShapeGeometry(rounded(w, h, r), segments);
   const uv = g.attributes.uv as THREE.BufferAttribute;
   const at = g.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < uv.count; i++) {
@@ -161,40 +174,19 @@ function panel(w: number, h: number, r: number, m: THREE.Material, mirror = fals
  * goes quietly wherever the geometry it was made for went.
  */
 let coat: ((f: Finish) => void) | null = null;
+let phoneCoat: ((f: Finish) => void) | null = null;
 
-/**
- * The Fujikey Nero, open on the counter.
- *
- * Everything here is the size the real thing is, at the three-to-one the rest
- * of the room is drawn at: three hundred and twelve millimetres across, ten
- * deep at the case, six through the lid. A laptop is the one object on this
- * counter everybody in the room owns, which means it is the one object where
- * being a centimetre out in any direction reads immediately as wrong, in a way
- * a mug two sizes too big never does.
- *
- * It is anodised aluminium, pale keys, and a dark bezel — which in a kitchen
- * of oak and cream is the difference between a machine somebody left open and
- * a black rectangle sitting on the worktop. Which anodising is the reader's,
- * and is the only thing about this prop that can change after it is built.
- *
- * The keyboard is not modelled. Seventy keys as seventy boxes would be a
- * thousand vertices, and because the trace shares its rays out by vertex, the
- * cost would not have landed on the laptop — it would have come off the light
- * on everything else standing on the wood. It is a picture instead, in a well
- * that is real: aluminium rails around a recess with the quad at the bottom of
- * it, so what darkens the keys is the shadow of the case they sit in rather
- * than a gradient painted on to suggest one.
- */
+/** Rounded aluminum notebook with sculpted, color-matched keys and a glass trackpad. */
 function nero() {
   const g = new THREE.Group();
   const W = 960;
   const D = 676;
-  const LID = 672;
+  const LID = 628;
   /** How far the aluminium stands above the well the keys sit in. */
   const RAIL = 8;
   const top = 36 + RAIL;
   /** Eight millimetres, which is about what the corners of one of these run to. */
-  const R = 26;
+  const R = 38;
 
   /* Anodising is a tint in the oxide rather than a coat of paint over it, so
      the colour has to survive being mostly reflection — which is why the
@@ -203,26 +195,43 @@ function nero() {
      it is the blasting, which is the other half of why the real thing never
      looks like plastic. */
   const shell = new THREE.MeshStandardMaterial({
-    roughness: 0.5, metalness: 0.5, envMapIntensity: 1.05, ...anodised(),
+    roughness: 0.43, metalness: 0.72, envMapIntensity: 1.1, ...anodised(true),
   });
   /* Glass over the same metal, so it is the body colour a shade down rather
      than a colour of its own — which is what a trackpad actually is. */
   const pane = new THREE.MeshStandardMaterial({
-    roughness: 0.15, metalness: 0.32, envMapIntensity: 1.15,
+    roughness: 0.34, metalness: 0.18, envMapIntensity: 0.8,
   });
+  const keySides = new THREE.MeshStandardMaterial({ roughness: 0.63 });
+  const keyTops = new THREE.MeshStandardMaterial({ roughness: 0.58, ...keyboard() });
   coat = (f) => {
     shell.color.setHex(f.body);
-    pane.color.setHex(f.body).multiplyScalar(0.95);
+    pane.color.setHex(f.body).multiplyScalar(0.96);
+    keySides.color.setHex(f.body).lerp(new THREE.Color(0xffffff), 0.72);
+    keyTops.color.copy(keySides.color);
   };
   coat(finish());
 
   const inner = new THREE.MeshStandardMaterial({ color: 0x3a3c36, roughness: 0.66 });
 
+  const machined = (w: number, d: number, h: number, r: number, material: THREE.Material) => {
+    const bevel = Math.min(2, h / 4);
+    const geometry = new THREE.ExtrudeGeometry(rounded(w - bevel * 2, d - bevel * 2, r - bevel), {
+      depth: h - bevel * 2, bevelEnabled: true, bevelSize: bevel,
+      bevelThickness: bevel, bevelSegments: h < 5 ? 1 : 2, curveSegments: h < 5 ? 3 : 6,
+    });
+    geometry.rotateX(Math.PI / 2);
+    geometry.translate(0, h - bevel, 0);
+    const mesh = new THREE.Mesh(knit(geometry), material);
+    geometry.dispose();
+    return mesh;
+  };
+
   /* A plate under the case, inset all round. The gap it leaves is where the
      contact shadow goes, and a machine with one reads as standing on the
      counter rather than as printed on it. */
   part(g, slab(W - 52, D - 52, 6, R - 12, shell));
-  const base = slab(W, D, 30, R, shell);
+  const base = machined(W, D, 30, R, shell);
   base.position.y = 6;
   part(g, base);
 
@@ -240,19 +249,67 @@ function nero() {
   // the dark strip at the back that the lid folds down into
   part(g, bx(880, 4, 32, inner, 0, 38, -D / 2 + 34));
 
-  const keys = new THREE.Mesh(new THREE.PlaneGeometry(880, 330), new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.82, ...keyboard(),
-  }));
-  keys.rotation.x = -Math.PI / 2;
-  keys.position.set(0, 37, -D / 2 + 50 + 165);
-  part(g, keys);
+  const well = slab(878, 358, 1, 15, inner);
+  well.position.set(0, 36, -139);
+  part(g, well);
+  // Geometry carries the depth; a shared atlas carries only the legends and cap sheen.
+  const sx = 880 / 1024;
+  const sz = 330 / 384;
+  for (const key of NERO_KEYS) {
+    const w = key.w * sx;
+    const d = key.h * sz;
+    const x = (key.x + key.w / 2 - 512) * sx;
+    const z = -288 + (key.y + key.h / 2) * sz;
+    const cap = machined(w, d, 4.5, 4.5, keySides);
+    cap.position.set(x, 37, z);
+    part(g, cap);
+    const topFace = panel(w - 2, d - 2, 3.5, keyTops);
+    const uv = topFace.geometry.attributes.uv as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) {
+      uv.setXY(i, (key.x + 1 / sx + uv.getX(i) * (key.w - 2 / sx)) / 1024,
+        1 - (key.y + 1 / sz + (1 - uv.getY(i)) * (key.h - 2 / sz)) / 384);
+    }
+    topFace.rotation.x = -Math.PI / 2;
+    topFace.position.set(x, 41.6, z);
+    part(g, topFace);
+  }
 
   /* Set down in its cut-out rather than laid on top of it. A trackpad is very
      nearly flush with the case, so what you actually find it by is the
      hairline of shadow round the edge — which needs an edge to fall down. */
-  const pad = slab(420, 240, 6, 18, pane);
+  const pad = machined(424, 244, 7, 18, pane);
   pad.position.set(0, 36, D / 2 - 148);
   part(g, pad);
+
+  // Finger scoop, bottom seam, and rubber feet give the thin case a readable edge.
+  const scoop = panel(126, 8, 4, inner);
+  scoop.position.set(0, 34, D / 2 + 0.15);
+  part(g, scoop);
+  for (const x of [-W / 2 + 55, W / 2 - 55]) {
+    for (const z of [-D / 2 + 55, D / 2 - 55]) {
+      const foot = cyl(20, 22, 4, inner, 16);
+      foot.position.set(x, 2, z);
+      part(g, foot);
+    }
+  }
+  // Side-mounted USB-C ports and an audio jack sit inside dark, chamfered openings.
+  for (const z of [-225, -163]) {
+    const port = panel(27, 10, 5, inner);
+    port.rotation.y = -Math.PI / 2;
+    port.position.set(-W / 2 - 0.1, 22, z);
+    part(g, port);
+    part(g, bx(0.6, 2, 18, pane, -W / 2 - 0.3, 22, z));
+  }
+  const jack = new THREE.Mesh(new THREE.CircleGeometry(5, 16), inner);
+  jack.rotation.y = -Math.PI / 2;
+  jack.position.set(-W / 2 - 0.15, 22, -105);
+  part(g, jack);
+  for (const x of [-340, 340]) {
+    const hinge = cyl(10, 10, 125, shell, 20);
+    hinge.rotation.z = Math.PI / 2;
+    hinge.position.set(x, 44, -D / 2 + 20);
+    part(g, hinge);
+  }
 
   /*
    * The lid, hinged at the back edge of the case.
@@ -265,10 +322,10 @@ function nero() {
    * reason a modern one looks machined rather than assembled.
    */
   const lid = new THREE.Group();
-  const shut = new THREE.ExtrudeGeometry(rounded(W, LID, R - 2), {
-    depth: 18, bevelEnabled: false, curveSegments: SEGMENTS,
+  const shut = new THREE.ExtrudeGeometry(rounded(W - 4, LID - 4, R - 4), {
+    depth: 14, bevelEnabled: true, bevelSize: 2, bevelThickness: 2, bevelSegments: 2, curveSegments: 6,
   });
-  shut.translate(0, 0, -9);
+  shut.translate(0, 0, -7);
   const panelMesh = new THREE.Mesh(knit(shut), shell);
   panelMesh.position.y = LID / 2;
   part(lid, panelMesh);
@@ -285,7 +342,7 @@ function nero() {
     emissiveIntensity: 0.26,
     emissiveMap: lit.map,
     ...lit,
-  }));
+  }), false, 6);
   face.position.set(0, LID / 2, 10);
   part(lid, face);
   lid.position.set(0, top, -D / 2 + 9);
@@ -294,26 +351,12 @@ function nero() {
   return g;
 }
 
-/**
- * The Levona Tinkerbel: the other kind of laptop entirely.
- *
- * Deeper, squarer and thicker than the Nero, with a twelve-unit radius where
- * the other has twenty-six — which is four millimetres against eight, and is
- * most of why one reads as milled and the other as moulded. It is a box that
- * has been getting on with it since before anybody thought a laptop should be
- * thin, and every proportion here is arguing that.
- *
- * The three things that actually name it are all small: a red nub in the
- * middle of the keys, three buttons underneath them, and a chin deep enough to
- * write on. The first two come in on the deck texture, the third is simply
- * bezel — and none of them cost a triangle, which is the only reason a second
- * machine is affordable at all.
- */
+/** Squared soft-touch workstation with dished keys and physical pointing controls. */
 function tinkerbel() {
   const g = new THREE.Group();
   const W = 960;
   const D = 700;
-  const LID = 700;
+  const LID = 654;
   const RAIL = 10;
   const top = 40 + RAIL;
   /** Four millimetres. A business laptop is a box and is meant to look it. */
@@ -323,15 +366,19 @@ function tinkerbel() {
      there is almost no reflection left to tint. Which is also why the same six
      colours would look wrong here — this finish wants ink, not anodising. */
   const shell = new THREE.MeshStandardMaterial({
-    roughness: 0.82, metalness: 0.06, envMapIntensity: 0.5, ...softTouch(),
+    roughness: 0.76, metalness: 0.02, envMapIntensity: 0.65, ...softTouch(),
   });
   const inner = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.78 });
 
+  const badgeMaterial = new THREE.MeshStandardMaterial({
+    map: tinkerMark(), alphaTest: 0.4, roughness: 0.68,
+  });
   coat = (f) => {
     shell.color.setHex(f.body);
+    badgeMaterial.map = tinkerMark(f.id === 'white');
   };
   coat(finish());
-  onPaint(coat);
+
 
   part(g, slab(W - 56, D - 56, 6, R - 5, shell));
   const base = slab(W, D, 34, R, shell);
@@ -349,12 +396,72 @@ function tinkerbel() {
 
   part(g, bx(900, 4, 28, inner, 0, 42, -D / 2 + 36));
 
-  const keys = new THREE.Mesh(new THREE.PlaneGeometry(900, 390), new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.94, ...thinkDeck(),
-  }));
-  keys.rotation.x = -Math.PI / 2;
-  keys.position.set(0, 41, -D / 2 + 50 + 195);
-  part(g, keys);
+  const well = slab(898, 388, 1, 9, inner);
+  well.position.set(0, 40, -105);
+  part(g, well);
+  const capSide = new THREE.MeshStandardMaterial({ color: 0x202226, roughness: 0.7 });
+  const capTop = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.62, ...thinkDeck() });
+  const sx = 900 / 1024;
+  const sz = 390 / 444;
+  for (const key of THINK_KEYS) {
+    const w = key.w * sx;
+    const d = key.h * sz;
+    const x = (key.x + key.w / 2 - 512) * sx;
+    const z = -300 + (key.y + key.h / 2) * sz;
+    const geometry = new THREE.ExtrudeGeometry(rounded(w - 2, d - 2, 4), {
+      depth: 4.5, bevelEnabled: true, bevelSize: 1, bevelThickness: 1,
+      bevelSegments: 1, curveSegments: 3,
+    });
+    geometry.rotateX(Math.PI / 2);
+    geometry.translate(0, 5.5, 0);
+    const cap = new THREE.Mesh(knit(geometry), capSide);
+    geometry.dispose();
+    cap.position.set(x, 41, z);
+    part(g, cap);
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(w - 4, d - 4, 4, 4), capTop);
+    // A shallow concave top catches light at the edges of each key.
+    const positions = face.geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < positions.count; i++) {
+      const edge = Math.max(Math.abs(positions.getX(i)) / (w / 2), Math.abs(positions.getY(i)) / (d / 2));
+      positions.setZ(i, 0.65 * edge * edge);
+    }
+    face.geometry.computeVertexNormals();
+    const uv = face.geometry.attributes.uv as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) {
+      uv.setXY(i, (key.x + 2 / sx + uv.getX(i) * (key.w - 4 / sx)) / 1024,
+        1 - (key.y + 2 / sz + (1 - uv.getY(i)) * (key.h - 4 / sz)) / 444);
+    }
+    face.rotation.x = -Math.PI / 2;
+    face.position.set(x, 47.6, z);
+    part(g, face);
+  }
+
+  const red = new THREE.MeshStandardMaterial({ color: 0xd62f32, roughness: 0.88 });
+  const keyG = THINK_KEYS.find((key) => key.label === 'G')!;
+  const nubX = (keyG.x + keyG.w + 3.5 - 512) * sx;
+  const nubZ = -300 + (keyG.y + keyG.h + 3) * sz;
+  const nub = cyl(8.5, 10, 7, red, 24);
+  nub.position.set(nubX, 49, nubZ);
+  part(g, nub);
+  // Raised rubber dots make the pointing stick visibly tactile at close range.
+  for (let x = -5; x <= 5; x += 2.5) {
+    for (let z = -5; z <= 5; z += 2.5) {
+      if (Math.hypot(x, z) > 6) continue;
+      const dot = cyl(0.65, 0.8, 0.8, red, 6);
+      dot.position.set(nubX + x, 52.9, nubZ + z);
+      part(g, dot);
+    }
+  }
+  for (const [x, w] of [[-126, 142], [0, 102], [126, 142]]) {
+    const button = slab(w, 52, 6, 6, capSide);
+    button.position.set(x, 42, 46);
+    part(g, button);
+    const stripe = bx(w - 20, 0.6, 2, red, x, 48.3, 25);
+    part(g, stripe);
+    if (x === 0) {
+      for (const z of [36, 43, 50]) part(g, bx(30, 0.7, 1.4, inner, x, 48.4, z));
+    }
+  }
 
   // matte glass, set down in its cut-out the way the other one's is
   const pad = slab(336, 176, 7, 9, new THREE.MeshStandardMaterial({
@@ -363,25 +470,59 @@ function tinkerbel() {
   pad.position.set(0, 40, 210);
   part(g, pad);
 
-  /* The name, on a card rather than in the case. It is a cut-out, so the trace
-     leaves it alone — shading a rectangle with a word painted on it would
-     shade the corners that are not there. */
-  const mark = new THREE.Mesh(new THREE.PlaneGeometry(190, 47), new THREE.MeshStandardMaterial({
-    /* A cut-out, not a transparent card: alpha-tested it stays in the opaque
-       pass, takes the trace's vertex colours like everything else on the case,
-       and folds into the merge at the end of the bake instead of hanging off
-       the prop as its own draw call for the rest of the session. */
-    map: tinkerMark(), alphaTest: 0.4, roughness: 0.8,
-  }));
+  const mark = new THREE.Mesh(new THREE.PlaneGeometry(200, 50), badgeMaterial);
   mark.rotation.x = -Math.PI / 2;
-  mark.position.set(-W / 2 + 150, top + 0.6, D / 2 - 44);
+  mark.rotateZ(0.15);
+  mark.position.set(W / 2 - 144, top + 0.7, D / 2 - 61);
   part(g, mark);
 
+  const metal = new THREE.MeshStandardMaterial({ color: 0x777b80, roughness: 0.35, metalness: 0.8 });
+  for (const x of [-350, 350]) {
+    const hinge = cyl(12, 12, 100, metal, 20);
+    hinge.rotation.z = Math.PI / 2;
+    hinge.position.set(x, 49, -D / 2 + 19);
+    part(g, hinge);
+  }
+  // Fingerprint reader and power key have distinct inset borders.
+  const reader = slab(37, 43, 1, 4, inner);
+  reader.position.set(260, top + 0.2, 164);
+  part(g, reader);
+  const sensor = slab(29, 35, 1, 3, capSide);
+  sensor.position.set(260, top + 1.3, 164);
+  part(g, sensor);
+  const power = cyl(12, 13, 2, inner, 20);
+  power.position.set(415, top + 1, -322);
+  part(g, power);
+  const led = new THREE.MeshStandardMaterial({ color: 0xbad2b1, emissive: 0x6c985f, emissiveIntensity: 0.3 });
+  part(g, bx(8, 0.6, 1.5, led, 415, top + 2.2, -322));
+
+  // Vent slots and port faces stay shallow so they read as openings in the case.
+  for (let z = -240; z <= -70; z += 12) {
+    const slot = panel(5, 16, 2, inner);
+    slot.rotation.y = Math.PI / 2;
+    slot.position.set(W / 2 + 0.15, 25, z);
+    part(g, slot);
+  }
+  for (const [z, width, height] of [[-240, 28, 10], [-185, 28, 10], [-112, 48, 16], [-28, 44, 16]]) {
+    const port = panel(width, height, 3, inner);
+    port.rotation.y = -Math.PI / 2;
+    port.position.set(-W / 2 - 0.15, 24, z);
+    part(g, port);
+    part(g, bx(0.5, 2, width - 9, metal, -W / 2 - 0.3, 24, z));
+  }
+  for (const x of [-400, 400]) {
+    for (const z of [-285, 285]) {
+      const foot = slab(65, 26, 4, 8, inner);
+      foot.position.set(x, 0, z);
+      part(g, foot);
+    }
+  }
+
   const lid = new THREE.Group();
-  const shut = new THREE.ExtrudeGeometry(rounded(W, LID, R), {
-    depth: 22, bevelEnabled: false, curveSegments: SEGMENTS,
+  const shut = new THREE.ExtrudeGeometry(rounded(W - 3, LID - 3, R), {
+    depth: 19, bevelEnabled: true, bevelSize: 1.5, bevelThickness: 1.5, bevelSegments: 2, curveSegments: 4,
   });
-  shut.translate(0, 0, -11);
+  shut.translate(0, 0, -9.5);
   const panelMesh = new THREE.Mesh(knit(shut), shell);
   panelMesh.position.y = LID / 2;
   part(lid, panelMesh);
@@ -415,7 +556,7 @@ function laptop() {
 /* ------------------------------------------------------------------ phone */
 
 /** Seventy-two millimetres across, and every other number follows from it. */
-const PHONE = { w: 221, d: 451, thick: 22, r: 31 };
+const PHONE = { w: 221, d: 451, thick: 22, r: 48 };
 
 /**
  * Where the handset ends up when the magnet takes it, relative to the dock.
@@ -531,54 +672,117 @@ function handsetScreen(): Screen {
 
 let lit: Screen | null = null;
 
-/**
- * The fujiPhone Max, face down on the counter.
- *
- * Built lying flat with its screen up, and then turned over by whoever places
- * it — which is the only orientation worth modelling from, because it is the
- * one every other pose is a rotation of. Face down on the wood, or up on the
- * charger: the same object, twice.
- *
- * Titanium white, and it is the one prop here I chose the colour of. A phone
- * is the most photographed object of the last twenty years and the colour it
- * is photographed in is always this one — a pale coating that reads warm
- * against oak and cold against concrete, which happens to be exactly the two
- * rooms it has to live in.
- */
+/** Screen faces +Y; the pearl back and camera assembly face -Y. */
 function phone() {
   const g = new THREE.Group();
   const half = PHONE.thick / 2;
-
   const frame = new THREE.MeshStandardMaterial({
-    color: 0xd7d4cd, roughness: 0.34, metalness: 0.62, envMapIntensity: 1.2, ...anodised(),
+    color: 0xa7a095, roughness: 0.34, metalness: 0.82, envMapIntensity: 1.3,
   });
-  const glass = new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.1, metalness: 0.02, envMapIntensity: 0.8, ...pearl(),
+  const trim = new THREE.MeshStandardMaterial({
+    color: 0xc4bdb1, roughness: 0.23, metalness: 0.88, envMapIntensity: 1.4,
+  });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x171a1e, roughness: 0.28, metalness: 0.4 });
+  const glass = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff, roughness: 0.25, metalness: 0.32, clearcoat: 0.85,
+    clearcoatRoughness: 0.12, envMapIntensity: 1.15, ...pearl(),
   });
 
-  const body = slab(PHONE.w, PHONE.d, PHONE.thick, PHONE.r, frame);
+  // Bevels stay inside the requested bounds so the front still rests on the desk.
+  const shell = (w: number, d: number, h: number, r: number, bevel: number, material: THREE.Material) => {
+    const geometry = new THREE.ExtrudeGeometry(rounded(w - bevel * 2, d - bevel * 2, r - bevel), {
+      depth: h - bevel * 2, bevelEnabled: true, bevelSize: bevel,
+      bevelThickness: bevel, bevelSegments: 3, curveSegments: 10,
+    });
+    geometry.rotateX(Math.PI / 2);
+    geometry.translate(0, h - bevel, 0);
+    const mesh = new THREE.Mesh(knit(geometry), material);
+    geometry.dispose();
+    return mesh;
+  };
+  const body = shell(PHONE.w, PHONE.d, PHONE.thick, PHONE.r, 3, frame);
   body.position.y = -half;
   part(g, body);
 
-  // the back, which is the side you are meant to be looking at
-  const back = panel(PHONE.w - 5, PHONE.d - 5, PHONE.r - 3, glass, true);
+  const back = panel(PHONE.w - 7, PHONE.d - 7, PHONE.r - 4, glass, true, 10);
   back.rotation.x = Math.PI / 2;
-  back.position.y = -half - 0.7;
+  back.position.y = -half - 0.4;
   part(g, back);
 
-  /* The plateau. Big enough that it is the first thing you see and the reason
-     the thing will not lie flat on a table — which is, at this point, simply
-     what a camera on a phone is. */
-  const island = slab(PHONE.w * 0.62, PHONE.w * 0.62, 8, 30, frame);
-  island.position.set(-PHONE.w * 0.11, -half - 8, -PHONE.d * 0.27);
-  part(g, island);
-
-  const plate = panel(PHONE.w * 0.62 - 9, PHONE.w * 0.62 - 9, 26, new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.36, metalness: 0.35, envMapIntensity: 1, ...lenses(),
-  }), true);
+  // Rear-view left is +X in the screen-facing model. Keep the island's
+  // layout in rear-view coordinates, then convert it once at placement.
+  const camera = new THREE.Group();
+  camera.position.set(44, -half, -151);
+  camera.scale.set(0.7, 1, 0.7);
+  g.add(camera);
+  const island = shell(151, 151, 12, 34, 3, trim);
+  island.position.set(0, -12, 0);
+  part(camera, island);
+  const gasket = panel(142, 142, 30, dark, true, 10);
+  gasket.rotation.x = Math.PI / 2;
+  gasket.position.y = -12.15;
+  part(camera, gasket);
+  const plate = panel(135, 135, 27, new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.38, metalness: 0.55, envMapIntensity: 1, ...lenses(),
+  }), true, 10);
   plate.rotation.x = Math.PI / 2;
-  plate.position.set(-PHONE.w * 0.11, -half - 8.7, -PHONE.d * 0.27);
-  part(g, plate);
+  plate.position.set(0, -12.2, 0);
+  part(camera, plate);
+
+  // Two overlapping capsule supports reproduce the diagonal, folded island.
+  const supportMaterial = new THREE.MeshStandardMaterial({
+    color: 0x8e877e, roughness: 0.32, metalness: 0.78, envMapIntensity: 1.1,
+  });
+  for (const [ax, az, bx, bz, height] of [[27, 33, -30, 0, 1.5], [27, -33, -30, 0, 2]]) {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const support = shell(58, Math.hypot(dx, dz) + 58, height, 29, 0.5, supportMaterial);
+    support.rotation.y = Math.atan2(dx, dz);
+    support.position.set((ax + bx) / 2, -12.3 - height, (az + bz) / 2);
+    part(camera, support);
+  }
+  phoneCoat = (f) => {
+    const titanium = f.id === 'titanium';
+    frame.color.setHex(f.body);
+    trim.color.setHex(titanium ? 0xc4bdb1 : f.body).lerp(new THREE.Color(0xffffff), titanium ? 0 : 0.16);
+    supportMaterial.color.setHex(titanium ? 0x8e877e : f.body);
+    glass.color.setHex(titanium ? 0xffffff : f.body);
+    glass.map = pearl(!titanium).map!;
+  };
+  phoneCoat(phoneFinish());
+
+  const indicator = new THREE.Mesh(new THREE.CircleGeometry(1.5, 12),
+    new THREE.MeshStandardMaterial({ color: 0x783c30, roughness: 0.4 }));
+  indicator.rotation.x = Math.PI / 2;
+  indicator.position.set(-27, -12.4, -49);
+  part(camera, indicator);
+
+  const optics = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.1, metalness: 0.35, envMapIntensity: 1.3, ...lensGlass(),
+  });
+  for (const [x, z, radius] of [[-27, -33, 27], [30, 0, 27], [-27, 33, 27]]) {
+    const barrel = cyl(radius, radius, 5, dark, 40);
+    barrel.position.set(-x, -14.5, z);
+    part(camera, barrel);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(radius - 1.2, 1.8, 6, arc(40)), trim);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.set(-x, -17, z);
+    part(camera, rim);
+    const lens = new THREE.Mesh(new THREE.CircleGeometry(radius - 3, arc(40)), optics);
+    lens.rotation.x = Math.PI / 2;
+    lens.position.set(-x, -17.1, z);
+    part(camera, lens);
+  }
+
+  const flash = shell(18, 25, 1.8, 7, 0.6, trim);
+  flash.position.set(-76, -half - 1.8, -167);
+  part(g, flash);
+  const diffuser = panel(12, 18, 5, new THREE.MeshStandardMaterial({
+    color: 0xfff8df, roughness: 0.25,
+  }));
+  diffuser.rotation.x = Math.PI / 2;
+  diffuser.position.set(-76, -half - 2, -167);
+  part(g, diffuser);
 
   lit = handsetScreen();
   const face = panel(PHONE.w - 17, PHONE.d - 17, PHONE.r - 9, new THREE.MeshStandardMaterial({
@@ -589,17 +793,24 @@ function phone() {
     emissiveIntensity: 0.55,
     map: lit.texture,
     emissiveMap: lit.texture,
-  }));
+  }), false, 10);
   face.rotation.x = -Math.PI / 2;
   face.position.y = half + 0.7;
   part(g, face);
 
-  // volume down the one side, sleep down the other
-  for (const [x, z, len] of [[-1, -58, 74], [-1, 34, 74], [1, -22, 96]] as [number, number, number][]) {
-    part(g, bx(7, 11, len, frame, (x * PHONE.w) / 2, -half + 3, z));
+  // Rounded, inset side controls follow the rail instead of protruding as boxes.
+  for (const [side, z, length] of [[-1, -62, 53], [-1, 7, 36], [1, -34, 63]]) {
+    const button = shell(8, length, 3, 3.5, 0.8, trim);
+    button.rotation.z = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+    button.position.set(side * (PHONE.w / 2 - 0.5), 0, z);
+    part(g, button);
   }
 
-  return g;
+  // Rotate the model itself so saved counter placements also get the new heading.
+  const handset = new THREE.Group();
+  g.rotation.y = Math.PI;
+  handset.add(g);
+  return handset;
 }
 
 /**
@@ -806,9 +1017,11 @@ function pose(handset: THREE.Group, stand: THREE.Group | undefined) {
       stand.position.z + DOCK.out,
     );
     handset.rotation.set(Math.PI / 2 - DOCK.lean, stand.rotation.y, 0);
+    // Cancel the counter heading while docked so the display faces forward.
+    handset.rotateY(Math.PI);
     return;
   }
-  handset.position.y = COUNTER.top + PHONE.thick / 2;
+  handset.position.y = COUNTER.top + PHONE.thick / 2 + 0.7;
   handset.rotation.set(Math.PI, handset.rotation.y, 0);
 }
 
@@ -934,6 +1147,11 @@ export function buildProps(
      it are two separate things, and a change made while nothing else is
      moving needs both or it waits for the next time somebody touches the
      camera. */
+  onPhonePaint((f) => {
+    phoneCoat?.(f);
+    settled();
+  });
+
   onPaint((f) => {
     coat?.(f);
     settled();

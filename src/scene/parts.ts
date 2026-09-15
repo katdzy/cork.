@@ -421,6 +421,12 @@ export function shaft(
     new THREE.Vector3(towards.x, towards.y, towards.z).normalize(),
   );
   g.renderOrder = 8;
+  /* The first thing to go if the machine turns out to be struggling. Two
+     cards the height of the room, additive and depth-sorted, are a lot of
+     overdraw, and overdraw is the one cost a tiled mobile GPU cannot absorb
+     — it is the whole thing the architecture is built to avoid. See the
+     frame-time ladder in `useRoomScene`. */
+  g.userData.shed = true;
   return still(g);
 }
 
@@ -436,5 +442,7 @@ export function lightPool(
   m.rotation.x = -Math.PI / 2;
   m.position.set(at.x, at.y, at.z);
   m.renderOrder = 7;
+  // goes with the beam that lands in it; one without the other reads as a bug
+  m.userData.shed = true;
   return still(m);
 }

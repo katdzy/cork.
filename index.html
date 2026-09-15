@@ -8,14 +8,46 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      Fetched at once, applied when it lands.
+
+      A plain stylesheet link blocks the first paint on a round trip to
+      someone else's server — and because the font files live on a second
+      host, on a cold cache that is two lookups, two handshakes and two
+      requests before anything at all can be drawn. On a phone on a slow
+      connection that is most of the wait, and it buys nothing: every family
+      here is already `display=swap`, so the text was always going to be
+      painted in the fallback first and swapped a moment later. Asking for it
+      as print media starts the download at the same moment and takes the
+      paint off the end of it; the onload hands it to the screen when it
+      arrives. Anyone without scripting gets the ordinary blocking link.
+    -->
     <link
       href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Caveat:wght@600&family=Patrick+Hand&family=Space+Mono:wght@400;700&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Caveat:wght@600&family=Patrick+Hand&family=Space+Mono:wght@400;700&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
     <title>Cork. — Keep your memories close</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div role="status" style="position:fixed;inset:0;background:#eee6d7;color:#42362b;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif">
+        <strong style="font-size:76px;letter-spacing:-6px">cork<span style="color:#b75b42">.</span></strong>
+        <p style="font-size:14px;color:#897057">keep your memories close</p>
+        <div role="progressbar" aria-label="Loading Cork" aria-valuemin="0" aria-valuemax="100" aria-valuenow="10" style="width:240px;height:3px;background:#d9cdbb;margin-top:24px">
+          <div style="width:10%;height:100%;background:#a95740"></div>
+        </div>
+        <p style="font-size:11px;color:#7f6b58">Loading Cork…</p>
+        <noscript>Enable JavaScript to open your corkboard.</noscript>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

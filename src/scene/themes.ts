@@ -73,7 +73,7 @@ function finish(group: THREE.Group, settled: () => void): THREE.Group {
  * thousands contains nothing at all. Everything then renders with no
  * shadows and no error, looking merely flat.
  */
-function kitchenLight() {
+export function kitchenLight() {
   const g = new THREE.Group();
   const sun = new THREE.DirectionalLight(0xfff0d8, 4.6);
   sun.position.set(WINDOW.x + 4200, WINDOW.top + 2600, (WINDOW.near + WINDOW.far) / 2 + 3400);

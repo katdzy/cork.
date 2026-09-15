@@ -233,3 +233,37 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* First visit: a small cinematic prologue, with readable captions at every size. */
+.startup-loading { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #eee6d7; color: #42362b; padding: 28px; }
+.startup-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: .19em; text-transform: uppercase; }
+.startup-loading h1 { font-size: 76px; font-weight: 800; letter-spacing: -.08em; margin: 22px 0 0; line-height: 1; }
+.startup-loading h1 span { color: #b75b42; }
+.startup-loading p { margin: 12px 0 38px; font-size: 23px; color: #897057; }
+.startup-meter { width: min(280px, 80vw); height: 3px; background: #d9cdbb; overflow: hidden; border-radius: 4px; }
+.startup-meter > div { height: 100%; background: #a95740; transition: width .4s ease; }
+.startup-label { width: min(280px, 80vw); margin-top: 12px; font-size: 11px; color: #7f6b58; display: flex; justify-content: space-between; gap: 8px; }
+.opening { position: fixed; inset: 0; z-index: 80; color: #eee; background: #000; isolation: isolate; outline: none; }
+.opening-scene, .opening-scene canvas, .opening-fallback { position: absolute; inset: 0; width: 100%; height: 100%; }
+.opening-cinema { --letterbox: clamp(18px, 4.4vh, 40px); }
+.opening-cinema .opening-scene { top: var(--letterbox); bottom: var(--letterbox); height: calc(100% - var(--letterbox) * 2); }
+.opening-vignette { position: absolute; inset: var(--letterbox) 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 48%, rgba(12, 10, 8, .15) 100%); }
+.opening-letterbox { position: absolute; left: 0; right: 0; height: var(--letterbox); background: #000; z-index: 3; pointer-events: none; }
+.opening-letterbox-top { top: 0; }
+.opening-letterbox-bottom { bottom: 0; }
+.opening-transition { position: absolute; inset: 0; pointer-events: none; background: #000; z-index: 2; opacity: 0; }
+.opening-controls { position: absolute; bottom: max(0px, env(safe-area-inset-bottom)); right: max(18px, env(safe-area-inset-right)); height: max(44px, var(--letterbox)); display: flex; align-items: center; gap: 18px; z-index: 4; opacity: 0; transition: opacity 250ms ease; }
+.opening-controls button { min-height: 44px; padding: 0 6px; font-size: 10px; font-weight: 500; letter-spacing: .06em; color: #b8b8b8; cursor: pointer; }
+.opening.controls-visible .opening-controls, .opening-controls:focus-within { opacity: 1; }
+.opening button:focus-visible { outline: 1px solid #eee; outline-offset: -5px; }
+.opening-fallback { display: grid; place-items: center; background: radial-gradient(ellipse at 50% 25%, #c7bca0, #3a443d); }
+.opening-fallback-board { width: min(55vw, 420px); aspect-ratio: 1.5; border: 12px solid #76513a; background: #b58653; box-shadow: 15px 20px 40px #0005; }
+@media (prefers-reduced-motion: reduce) { .startup-meter > div, .opening-controls { transition: none; } }
+
+
+/* Keep the header reachable while a long settings sheet scrolls inside the viewport. */
+.settings-overlay {
+  height: 100dvh;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.settings-content { touch-action: pan-y; scrollbar-gutter: stable; }

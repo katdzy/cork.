@@ -12,6 +12,7 @@ import { SCENES, SCENE_ORDER } from '../../scene/themes';
 import { BoardItem } from './BoardItem';
 import { EmptyBoard } from './EmptyBoard';
 import { ZoomControls } from './ZoomControls';
+import { Joystick } from './Joystick';
 import { FinishPicker } from './FinishPicker';
 
 export interface CanvasApi {
@@ -59,9 +60,10 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(
     [memories, boardId],
   );
 
+  const wide = useMedia('(min-width: 900px)');
   /* What the board is framed into is the window less whatever is parked on
      top of it — which, at this width, is the sidebar. */
-  const insetLeft = useMedia('(min-width: 900px)') ? SIDEBAR_SPAN : 0;
+  const insetLeft = wide ? SIDEBAR_SPAN : 0;
 
   const scene = useRoomScene(containerRef, boardRef, boardMemories, sceneId, view, insetLeft);
   const [isDropping, setIsDropping] = useState(false);
@@ -229,6 +231,13 @@ export const BoardCanvas = forwardRef<CanvasApi, Props>(function BoardCanvas(
         onFit={() => scene.fitAll()}
         onReset={() => scene.resetView()}
       />
+
+      {/* Only where the drag it stands in for has run out of room to start in,
+          and only in the room — square on to the board there is nothing to
+          swing, and a stick that does nothing is worse than no stick. */}
+      <AnimatePresence>
+        {!wide && view === 'room' && <Joystick onMove={scene.nudge} raised={shelfOpen} />}
+      </AnimatePresence>
 
       <AnimatePresence>
         {scene.finishAt && <FinishPicker at={scene.finishAt} />}

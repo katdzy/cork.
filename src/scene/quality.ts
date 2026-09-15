@@ -157,10 +157,79 @@ function probeGpu(): { name: string; webgl2: boolean; maxTexture: number } {
 }
 
 /** Software rasterisers. Nothing here is going to help them; give them least. */
-const SOFTWARE = /swiftshader|llvmpipe|softwarerasterizer|basic render/i;
-/** Mobile parts a generation or more back, and the old Intel integrated ones. */
-const MODEST =
-  /mali-[tg]?[1-6]\d{2}\b|adreno \(tm\) [2-5]\d{2}|powervr|videocore|intel\(r\) (hd|uhd) graphics (3|4|5)\d{2}/i;
+const SOFTWARE = /swiftshader|llvmpipe|softwarerasterizer|basic render|microsoft basic/i;
+
+/**
+ * What class of part that name is, as far as a name can say.
+ *
+ * This is a ceiling rather than a score, because that is what the information
+ * actually is. A budget phone with eight cores and eight gigabytes still has
+ * a GPU with two shader cores in it, and no amount of counting the things
+ * that are cheap to count will talk it out of that. The cores and the memory
+ * decide where inside the ceiling it lands; the ceiling itself is the GPU's.
+ *
+ * The names are read properly rather than pattern-matched loosely, because
+ * the loose version quietly matched nothing. ARM stopped numbering Mali by
+ * speed at Bifrost: the digits are a class and a generation, not a rank, and
+ * they are two digits in one era and three in the next. A pattern written for
+ * three digits — `mali-[tg]?[1-6]\d{2}` — misses Mali-G52 and Mali-G57, which
+ * between them are most of the Helio G-series and half of Dimensity, and
+ * misses Mali-G78 and G715, which are every Tensor. It matched PowerVR and
+ * nothing else, so in practice an Android phone was sorted entirely by the
+ * width of its screen: every phone got Medium and every tablet got High,
+ * whether it cost a hundred pounds or a thousand.
+ */
+type GpuClass = 'weak' | 'modest' | 'unknown';
+
+function classify(name: string): GpuClass {
+  if (!name) return 'unknown';
+
+  /*
+   * Mali, which is every MediaTek and every Tensor, and the reason this
+   * function exists.
+   *
+   * Utgard (a bare number) and Midgard (T-something) are pre-2017 and slow at
+   * anything with a shadow map in it. After that the leading digit is the
+   * class — G31, G52, G57, G310, G510 are the entry parts; G68 and up, and
+   * G610 and up, are the premium ones — and the digit count is only which
+   * decade ARM was in when it named them. So read the leading digit and
+   * ignore the rest, which is the one rule that holds across both.
+   */
+  const mali = /mali[-\s]?([tg])?\s?(\d{2,4})/i.exec(name);
+  if (mali) {
+    const [, series, digits] = mali;
+    if (!series || series.toLowerCase() === 't') return 'weak';
+    return Number(digits[0]) >= 6 ? 'modest' : 'weak';
+  }
+
+  /* Adreno numbers its parts in hundreds and does mean them as a rank. The
+     600 series straddles the line — a 610 and a 650 are four years and an
+     order of magnitude apart — so it is split rather than taken whole. */
+  const adreno = /adreno\D*(\d{3})/i.exec(name);
+  if (adreno) {
+    const n = Number(adreno[1]);
+    if (n < 620) return 'weak';
+    if (n < 700) return 'modest';
+    return 'unknown';
+  }
+
+  /* PowerVR and its IMG-branded successors are the other half of the budget
+     MediaTek line, and Vivante and VideoCore are set-top boxes and Pis. */
+  if (/powervr|\bimg\s+[bc]x|videocore|vivante|\bgc\d{4}/i.test(name)) return 'weak';
+  /* Samsung's RDNA parts, in the Exynos flagships: quick, and hot. */
+  if (/xclipse/i.test(name)) return 'modest';
+  /* Intel's integrated parts, which are the desktop end of the same problem.
+     The HD 3000/4000/5000 generations are weak by any measure; UHD 6xx and up
+     are slow at this and still attached to a fan and a real CPU, so they stop
+     at Medium rather than dropping to Low — a laptop panel is not dense
+     enough to give up multisampling on. Intel numbered the old ones in
+     thousands and the newer ones in hundreds, so the digit count is the
+     generation: HD 4000 is 2012 and UHD 620 is 2017. */
+  if (/intel\(r\)\s+(hd|uhd)\s+graphics\s+[345]\d{3}\b/i.test(name)) return 'weak';
+  if (/intel\(r\)\s+(hd|uhd)\s+graphics\b/i.test(name)) return 'modest';
+
+  return 'unknown';
+}
 
 function detect(): Tier {
   const gpu = probeGpu();
@@ -178,7 +247,6 @@ function detect(): Tier {
     else if (memory <= 4) score -= 1;
   }
 
-  if (MODEST.test(gpu.name)) score -= 2;
   if (!gpu.webgl2) score -= 1;
   if (gpu.maxTexture < 8192) score -= 1;
 
@@ -188,7 +256,23 @@ function detect(): Tier {
   if (coarse && !gpu.name) score -= 1;
   if (coarse && Math.min(screen.width, screen.height) <= 480) score -= 1;
 
-  return score >= 3 ? 'high' : score >= 1 ? 'medium' : 'low';
+  const tier: Tier = score >= 3 ? 'high' : score >= 1 ? 'medium' : 'low';
+
+  /*
+   * And then the ceiling, which overrules all of it.
+   *
+   * `modest` stops at Medium rather than dropping to Low, and Tensor is the
+   * case that shape is for. A Mali-G78 with twenty cores in it is not a weak
+   * GPU by any measure taken in the first thirty seconds — it is the thermal
+   * envelope around it that is weak, and a phone that is fast until it is
+   * warm cannot be caught by anything asked at load. So it opens at Medium,
+   * where it genuinely does run, and the frame-time ladder in `useRoomScene`
+   * takes it down from there if and when the heat arrives.
+   */
+  const kind = classify(gpu.name);
+  if (kind === 'weak') return 'low';
+  if (kind === 'modest' && tier === 'high') return 'medium';
+  return tier;
 }
 
 /* ---------------------------------------------------------------- resolve */
@@ -232,6 +316,32 @@ export function quality(): Settings {
  */
 export function texSize(base: number, limit = 2): number {
   return Math.max(128, base >> Math.min(quality().texSteps, limit));
+}
+
+/**
+ * How many of a thing to draw into a texture that is about to be shrunk.
+ *
+ * `texSize` was doing only half the job. It shrinks the canvas, and the draw
+ * that fills it runs in the authored coordinate space with the context scaled
+ * on the way in — so a quarter-size oak board still stroked all one hundred
+ * and ninety grain lines and still stamped all two thousand six hundred open
+ * pores, each of them a `fillRect` one pixel tall scaled down to a quarter of
+ * a pixel. The memory came down and the work did not, which is the wrong way
+ * round: the machines that get the small textures are the machines that are
+ * slow at drawing them, and on a phone the canvas work is most of the wait
+ * before the room appears.
+ *
+ * Counts follow the edge rather than the area — half the detail per step, not
+ * a quarter — because the point is to track what the texture can still
+ * resolve, not to cut as deep as possible. Oak with a tenth of its pores is
+ * oak at a distance; oak with a sixteenth of them is a plank.
+ *
+ * `limit` means what it means in `texSize`, and has to be passed the same way:
+ * a surface held back from shrinking is a surface that still has the
+ * resolution to show everything that was authored into it.
+ */
+export function detail(n: number, limit = 2): number {
+  return Math.max(1, Math.round(n / (1 << Math.min(quality().texSteps, limit))));
 }
 
 /* ------------------------------------------------------------ the control */

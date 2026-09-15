@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
 import { useCork } from './lib/store';
 import type { Memory } from './lib/types';
 import { searchMatches } from './lib/utils';
@@ -14,10 +14,11 @@ import { ResultsShelf } from './components/chrome/ResultsShelf';
 import { MemoryDetail } from './components/modals/MemoryDetail';
 import { SettingsSheet } from './components/modals/SettingsSheet';
 import { Toasts } from './components/ui/Toasts';
-import { Wordmark } from './components/chrome/Wordmark';
-import { Pin } from './components/board/Pin';
 import { Tour } from './components/chrome/Tour';
-import { useTour } from './lib/tour';
+import { useTour, startTour } from './lib/tour';
+import { finishOpening, needsOpening, useRoomReady } from './lib/startup';
+import { Opening } from './components/onboarding/Opening';
+import { LoadingScreen } from './components/onboarding/LoadingScreen';
 
 const VIEW_TITLES: Record<string, string> = {
   all: 'All memories',
@@ -41,6 +42,15 @@ export default function App() {
   const setActiveBoard = useCork((s) => s.setActiveBoard);
 
   const showTour = useTour();
+  const roomReady = useRoomReady();
+  const [bootDone, setBootDone] = useState(false);
+  useEffect(() => {
+    if (!roomReady) return;
+    const timer = window.setTimeout(() => setBootDone(true), 220);
+    return () => window.clearTimeout(timer);
+  }, [roomReady]);
+  const [opening, setOpening] = useState(needsOpening);
+  const completeOpening = () => { finishOpening(); setOpening(false); startTour(); };
   const canvasRef = useRef<CanvasApi>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -105,12 +115,13 @@ export default function App() {
     [],
   );
 
-  if (!ready) return <Splash />;
+  if (!ready) return <LoadingScreen />;
 
   return (
-    /* clip rather than hidden — see BoardCanvas. A scroll container here would
-       simply catch the same focus scroll one level up. */
-    <div className="relative h-full w-full overflow-clip">
+    <>
+    {/* clip rather than hidden — see BoardCanvas. A scroll container here would
+       simply catch the same focus scroll one level up. */}
+    <div className="relative h-full w-full overflow-clip" {...{ inert: opening || !bootDone ? '' : undefined }}>
       <input
         ref={fileRef}
         type="file"
@@ -176,13 +187,13 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} />}
+        {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} onReplayOpening={() => { setSettingsOpen(false); setOpening(true); }} />}
       </AnimatePresence>
 
       {/* Last, so it sits over everything. Not while Settings is open: that is
           where somebody goes to ask for it a second time, and a tour that
           covers the button you summoned it with is a poor start. */}
-      <AnimatePresence>{showTour && !settingsOpen && <Tour />}</AnimatePresence>
+      <AnimatePresence>{showTour && !settingsOpen && !opening && bootDone && <Tour />}</AnimatePresence>
 
       {/* a quiet hint — never over an empty board, which says its own piece */}
       {isDesktop && boardHasMemories && (
@@ -201,29 +212,8 @@ export default function App() {
         </span>
       )}
     </div>
-  );
-}
-
-function Splash() {
-  return (
-    <div className="wall relative grid h-full w-full place-items-center">
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        className="relative flex flex-col items-center"
-      >
-        <motion.div
-          initial={{ y: -26, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 260, damping: 14, delay: 0.15 }}
-          className="mb-4"
-        >
-          <Pin style="red" size={34} />
-        </motion.div>
-        <Wordmark size={34} />
-        <span className="hand mt-2 text-[19px] text-[#8a7458]">keep your memories close</span>
-      </motion.div>
-    </div>
+    {!bootDone && <LoadingScreen progress={roomReady ? (opening ? 85 : 100) : 75} label={roomReady ? "Your room is ready." : "Preparing your room…"} />}
+    {bootDone && opening && <Opening onComplete={completeOpening} />}
+    </>
   );
 }

@@ -1,3 +1,4 @@
+import { PHONE_FINISHES, setPhoneFinish, usePhoneFinish } from '../../scene/phoneFinishes';
 import { motion } from 'framer-motion';
 import { MODELS, setFinish, setModel, useLaptop } from '../../scene/models';
 
@@ -14,8 +15,14 @@ import { MODELS, setFinish, setModel, useLaptop } from '../../scene/models';
  * as belonging to the laptop rather than floating over the counter — a panel
  * with nothing tying it to a thing is chrome, and there is enough of that.
  */
-export function FinishPicker({ at }: { at: { x: number; y: number } }) {
-  const { model, finish } = useLaptop();
+export function FinishPicker({ at }: { at: { x: number; y: number; target: 'laptop' | 'phone' } }) {
+  const laptop = useLaptop();
+  const phone = usePhoneFinish();
+  const isPhone = at.target === 'phone';
+  const { model } = laptop;
+  const finish = isPhone ? phone : laptop.finish;
+  const finishes = isPhone ? PHONE_FINISHES : model.finishes;
+  const chooseFinish = isPhone ? setPhoneFinish : setFinish;
 
   return (
     <motion.div
@@ -27,7 +34,7 @@ export function FinishPicker({ at }: { at: { x: number; y: number } }) {
       transition={{ type: 'spring', stiffness: 460, damping: 32 }}
       className="panel-solid absolute z-30 rounded-[15px] px-3 pb-[11px] pt-[7px]"
       style={{
-        left: at.x,
+        left: Math.max(isPhone ? 144 : 105, Math.min(at.x, window.innerWidth - (isPhone ? 144 : 105))),
         top: at.y - 18,
         x: '-50%',
         y: '-100%',
@@ -36,7 +43,7 @@ export function FinishPicker({ at }: { at: { x: number; y: number } }) {
       }}
     >
       <div className="flex items-center justify-center gap-[3px]">
-        {MODELS.map((m) => {
+        {isPhone ? <span className="py-[3px] text-[10px] font-bold uppercase tracking-[0.1em] text-[#3f362a]">Phone · {finish.label}</span> : MODELS.map((m) => {
           const on = m.id === model.id;
           return (
             <button
@@ -56,12 +63,12 @@ export function FinishPicker({ at }: { at: { x: number; y: number } }) {
       </div>
 
       <div className="mt-[7px] flex items-center justify-center gap-[9px]">
-        {model.finishes.map((f) => {
+        {finishes.map((f) => {
           const on = f.id === finish.id;
           return (
             <button
               key={f.id}
-              onClick={() => setFinish(f.id)}
+              onClick={() => chooseFinish(f.id)}
               aria-pressed={on}
               aria-label={f.label}
               title={f.label}

@@ -115,7 +115,7 @@ export function Tour() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') endTour();
-      if (e.key === 'ArrowRight' || e.key === 'Enter') next();
+      if (e.key === 'ArrowRight' || (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement))) next();
       if (e.key === 'ArrowLeft') setI((n) => Math.max(0, n - 1));
     };
     window.addEventListener('keydown', onKey);
@@ -247,10 +247,11 @@ export function Tour() {
                 Skip
               </button>
               <button
+                autoFocus
                 onClick={next}
                 className="rounded-full bg-[#c0503a] px-[15px] py-[7px] text-[12.5px] font-bold text-[#fff6ea] transition-transform duration-200 hover:-translate-y-[1px] active:translate-y-0"
               >
-                {last ? 'Start pinning' : 'Next'}
+                {last ? 'Start pinning' : 'Continue'}
               </button>
             </div>
           </div>

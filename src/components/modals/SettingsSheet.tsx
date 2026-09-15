@@ -24,7 +24,7 @@ const TIER_BLURBS: Record<Tier, string> = {
   high: 'Everything: the largest shadow maps, full-size surfaces, the finest light trace.',
 };
 
-export function SettingsSheet({ onClose }: { onClose(): void }) {
+export function SettingsSheet({ onClose, onReplayOpening }: { onClose(): void; onReplayOpening(): void }) {
   const boards = useCork((s) => s.boards);
   const memories = useCork((s) => s.memories);
   const activeBoardId = useCork((s) => s.activeBoardId);
@@ -40,7 +40,7 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
   const boardCount = memories.filter((m) => m.boardId === activeBoardId).length;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center px-4" role="dialog" aria-modal="true" aria-label="Settings">
+    <div className="settings-overlay fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Settings">
       <motion.button
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -56,9 +56,9 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 10, scale: 0.98 }}
         transition={{ type: 'spring', stiffness: 340, damping: 30 }}
-        className="panel-solid relative w-full max-w-[440px] rounded-[20px] p-6"
+        className="panel-solid relative flex min-h-0 max-h-full w-full max-w-[440px] flex-col overflow-hidden rounded-[20px]"
       >
-        <div className="flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between px-6 pb-5 pt-6">
           <h2 className="text-[19px] font-extrabold tracking-[-0.02em] text-[#241d18]">Settings</h2>
           <button
             onClick={onClose}
@@ -71,7 +71,9 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
           </button>
         </div>
 
-        <div className="hairline my-5" />
+        <div className="hairline mx-6 shrink-0" />
+
+        <div className="settings-content scroll-thin min-h-0 overflow-y-auto overscroll-contain px-6 pb-6 pt-5">
 
         <span className="eyebrow">This board</span>
         <input
@@ -231,9 +233,18 @@ export function SettingsSheet({ onClose }: { onClose(): void }) {
           Show me round again
         </button>
 
+        <button
+          onClick={onReplayOpening}
+          className="mt-3 w-full rounded-[11px] py-[10px] text-[13px] font-bold text-[#6b5a45] transition-colors"
+          style={{ background: 'rgba(120,92,62,0.1)' }}
+        >
+          Replay the opening story
+        </button>
+
         <div className="mt-6 flex items-center justify-between">
           <Wordmark size={16} />
           <span className="hand text-[16px] text-[#a6968a]">keep your memories close</span>
+        </div>
         </div>
       </motion.div>
     </div>

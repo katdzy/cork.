@@ -13,6 +13,7 @@ import { captureProbe, disposeNeutral, type Probe } from './probe';
 import { cancelBakes } from './bake';
 import { quality, useGraphics } from './quality';
 import { disposeTextures } from './textures';
+import { markRoomReady } from '../lib/startup';
 
 export interface SceneApi {
   focusOn(memory: Memory, zoom?: number): void;
@@ -24,6 +25,19 @@ export interface SceneApi {
 }
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+
+/**
+ * How fast the stick moves you, in the pixels per second a drag would cover.
+ *
+ * One rate per axis, because the two axes are not the same size. The camera
+ * may swing about a hundred and ten degrees around the room and tilt through
+ * forty; a single rate would cross the short one in a third of the time and
+ * the stick would feel like it was falling over sideways. These put a full
+ * push through the whole of either in a little under two seconds — quick
+ * enough to get somewhere, slow enough to stop where you meant to.
+ */
+const STICK_SWING = 460;
+const STICK_RISE = 230;
 
 /**
  * The room, and the camera you look at it with.
@@ -67,7 +81,7 @@ export function useRoomScene(
      them at all. Screen pixels inside the container, worked out once when they
      open — everything that would move the camera under them closes them, so
      there is never a stale one to keep up with. */
-  const [finishAt, setFinishAt] = useState<{ x: number; y: number } | null>(null);
+  const [finishAt, setFinishAt] = useState<{ x: number; y: number; target: 'laptop' | 'phone' } | null>(null);
   /* Half of what a tier decides — multisampling, the shadow filter, the size
      every texture was baked at — is fixed for the life of a WebGL context or
      of a texture upload. So the tier is a dependency of this effect: changing
@@ -92,6 +106,12 @@ export function useRoomScene(
   viewRef.current = view;
   const insetRef = useRef(insetLeft);
   insetRef.current = insetLeft;
+
+  /* The stick, as it is being held — see `Joystick`. A ref rather than state
+     because what a held control carries is a speed, and a speed belongs to
+     the frame loop's clock; storing it in React would re-render the room
+     sixty times a second to say the same thing twice. */
+  const stick = useRef({ x: 0, y: 0 });
 
   const api = useRef<SceneApi | null>(null);
   const swapScene = useRef<((id: SceneId, animated: boolean) => void) | null>(null);
@@ -216,6 +236,29 @@ export function useRoomScene(
     /** What `touched` was when the cork view was entered, to go back to. */
     let roomTouched = false;
     let needsRender = true;
+    /** True once a struggling machine has given up the decorative light. */
+    let shedDone = false;
+
+    /**
+     * Put away anything marked as the first thing to go.
+     *
+     * Rooms are built once and kept, and the one being switched to may have
+     * been built before the machine started struggling — or not built yet at
+     * all. Either way it arrives with its beams switched on, so a phone that
+     * has already given them up in the kitchen would get them back by walking
+     * into the studio. Applied to each room as it comes in, rather than only
+     * at the moment of giving up.
+     */
+    const hideShed = (root: THREE.Object3D) => {
+      let found = false;
+      root.traverse((o) => {
+        if (o.userData.shed && o.visible) {
+          o.visible = false;
+          found = true;
+        }
+      });
+      return found;
+    };
 
     /** The room is drawn on demand, so anything that lands later has to ask. */
     const invalidate = () => {
@@ -342,6 +385,7 @@ export function useRoomScene(
         scene.add(entry.group);
       }
       room = entry.group;
+      if (shedDone) hideShed(entry.group);
       scene.environment = entry.probe.texture;
       scene.environmentIntensity = active.envIntensity;
 
@@ -409,9 +453,32 @@ export function useRoomScene(
     /* Multipliers on whatever the budget below works out to, rather than
        ratios in their own right: the ceiling is the tier's business and this
        is only the machine saying it cannot keep up with it. */
-    const DPR_SCALE = [1, 0.82, 0.66];
+    const DPR_SCALE = [1, 0.82, 0.66, 0.52];
     let dprStep = 0;
-    let slowFrames = 0;
+    /**
+     * Seconds owed: how far behind a comfortable frame the machine has fallen,
+     * summed while the camera is moving.
+     *
+     * This counted slow frames before, which treats a frame that took thirty
+     * milliseconds and one that took a hundred and fifty as the same evidence
+     * and needs two dozen of either before it acts. A phone that is three
+     * times too slow should be helped three times as fast, and a phone that
+     * is barely missing should mostly be left alone — so what accumulates is
+     * the overrun itself. A machine at 15fps crosses the threshold in four
+     * frames; one hovering at 40 takes a couple of seconds to get there, and
+     * one that hitches once never does, because a fast frame pays the debt
+     * back down again.
+     *
+     * The floor on how far it can be paid down is what stops a long smooth
+     * stretch buying immunity that then has to be spent before anything can
+     * happen — which is exactly the shape of a phone that runs beautifully
+     * for ninety seconds and then gets hot. Tensor is the part this is here
+     * for: nothing asked at load can see a thermal envelope, so the only
+     * honest way to find it is to keep watching.
+     */
+    let debt = 0;
+    /** A comfortable frame. Above 45fps nobody is looking for the difference. */
+    const BUDGET = 0.022;
 
     const applyDpr = () => {
       const w = container.clientWidth;
@@ -429,6 +496,36 @@ export function useRoomScene(
       const ratio = Math.min(window.devicePixelRatio || 1, q.maxPixelRatio, Math.sqrt(q.maxPixels / area));
       renderer.setPixelRatio(Math.max(0.62, ratio * DPR_SCALE[dprStep]));
       renderer.setSize(w, h, false);
+    };
+
+    /**
+     * One rung down.
+     *
+     * The air first, and then the pixels. The beam of sunlight and the patch
+     * it lands in are two draws, but they are additive, screen-sized and
+     * depth-sorted — on a tiled GPU they cost far more than their two draws
+     * suggest, and more than the twenty per cent of pixels the next rung
+     * would save. So they go at the first sign of trouble and the resolution
+     * holds one step longer, which is the right way round: a slightly softer
+     * room still reads as the room, and a room at half resolution is a
+     * different and worse-looking place.
+     *
+     * Nothing here comes back. Resizing the drawing buffer reallocates its
+     * colour, depth and multisample attachments together and costs about five
+     * milliseconds, so a ladder that climbed as well as fell would spend more
+     * on changing its mind than it ever saved.
+     */
+    const relieve = () => {
+      if (!shedDone) {
+        shedDone = true;
+        /* A rung that actually gave something back need not also cost pixels.
+           On a tier with no air in it there was nothing to give, so fall
+           through and take the resolution instead. */
+        if (hideShed(scene)) return;
+      }
+      if (dprStep >= DPR_SCALE.length - 1) return;
+      dprStep++;
+      applyDpr();
     };
 
     /** Set while the camera is in flight; see `.board-moving`. */
@@ -449,8 +546,43 @@ export function useRoomScene(
     const frame = () => {
       raf = requestAnimationFrame(frame);
       const now = performance.now();
-      const dt = Math.min(0.05, (now - last) / 1000);
+      /*
+       * Two readings of the same gap, for two different jobs.
+       *
+       * The clamp exists so that a tab coming back from the background does
+       * not integrate four minutes of camera motion in one step. That makes
+       * it exactly the wrong number to judge the machine by: it caps a
+       * hundred-and-fifty-millisecond frame at fifty and reports a phone in
+       * trouble as a phone that is merely late. So the health signal reads
+       * the gap as it actually was, and throws away only the gaps that are
+       * plainly not frames at all.
+       */
+      const raw = (now - last) / 1000;
+      const dt = Math.min(0.05, raw);
       last = now;
+
+      /*
+       * The stick, integrated.
+       *
+       * Held rather than pressed, so what it carries is a rate, and a rate is
+       * applied here on the frame's own clock rather than pushed in from an
+       * input handler — the same degrees per second whether the phone is
+       * managing sixty frames or thirty. It is fed to `rotate` in pixels
+       * because pixels are what a drag feeds it: the stick is that same
+       * gesture on a screen with nowhere to put your thumb, and the two
+       * should not arrive at different sensitivities.
+       *
+       * Negated, though, and that is the whole of the difference between
+       * them. A drag pushes the room past you; the stick moves *you*. Push it
+       * right and you walk right around the counter, push it up and you stand
+       * taller and the counter opens out below — which is the opposite sign,
+       * and the reason this is not simply wired to the same call.
+       */
+      const held = stick.current;
+      if (!cork && (held.x !== 0 || held.y !== 0)) {
+        touched = true;
+        orbit.rotate(-held.x * STICK_SWING * dt, -held.y * STICK_RISE * dt);
+      }
 
       const moving = orbit.update(camera, dt);
       if (moving) {
@@ -460,13 +592,15 @@ export function useRoomScene(
           boardMoving = true;
           boardEl.classList.add('board-moving');
         }
-        // only a sustained struggle counts, so one hitch never costs a step
-        if (dt > 0.028) slowFrames++;
-        else slowFrames = Math.max(0, slowFrames - 1);
-        if (slowFrames > 24 && dprStep < DPR_SCALE.length - 1) {
-          dprStep++;
-          applyDpr();
-          slowFrames = 0;
+        /* Only a sustained struggle counts, so one hitch never costs a step.
+           Anything past half a second is a tab resuming or a long task
+           somewhere else on the page, and neither is the renderer's fault. */
+        if (raw < 0.5) {
+          debt = clamp(debt + raw - BUDGET, -0.12, 0.6);
+          if (debt > 0.3) {
+            relieve();
+            debt = 0;
+          }
         }
       } else if (boardMoving && now - stillSince > 140) {
         // Handled before the early-out below, because when the camera is at
@@ -482,6 +616,7 @@ export function useRoomScene(
 
       renderer.render(scene, camera);
       css.render(cssScene, camera);
+      markRoomReady();
       // it starts hidden so it can't flash at the top-left corner for a frame
       if (boardEl.style.visibility !== 'visible') boardEl.style.visibility = 'visible';
 
@@ -563,13 +698,13 @@ export function useRoomScene(
     let dwell = 0;
     let restX = -999;
     let restY = -999;
-    let showing = false;
+    let showing: 'laptop' | 'phone' | null = null;
 
     const closeFinish = () => {
       window.clearTimeout(dwell);
       dwell = 0;
       if (!showing) return;
-      showing = false;
+      showing = null;
       setFinishAt(null);
     };
 
@@ -604,16 +739,16 @@ export function useRoomScene(
 
       if (showing) {
         // a moment's grace, so the pointer can cross the gap to the panel
-        if (propAt(e.clientX, e.clientY)?.def.id !== 'laptop') {
+        if (propAt(e.clientX, e.clientY)?.def.id !== showing) {
           dwell = window.setTimeout(closeFinish, 240);
         }
         return;
       }
       dwell = window.setTimeout(() => {
         const prop = propAt(restX, restY);
-        if (prop?.def.id !== 'laptop') return;
-        showing = true;
-        setFinishAt(above(prop));
+        if (prop?.def.id !== 'laptop' && prop?.def.id !== 'phone') return;
+        showing = prop.def.id;
+        setFinishAt({ ...above(prop), target: showing });
       }, DWELL);
     };
 
@@ -936,6 +1071,12 @@ export function useRoomScene(
     [],
   );
 
+  /** Where the stick is being held: each −1..1, zero for centred. */
+  const nudge = useCallback((x: number, y: number) => {
+    stick.current.x = x;
+    stick.current.y = y;
+  }, []);
+
   return {
     zoomLabel,
     grabbing,
@@ -950,5 +1091,6 @@ export function useRoomScene(
     zoomBy,
     centerPoint,
     toBoard,
+    nudge,
   };
 }

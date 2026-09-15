@@ -55,6 +55,43 @@ function signTexture() {
 
 /* -------------------------------------------------------------- fittings */
 
+/** The same movable board is used in the opening and on the kitchen wall. */
+export function buildCorkboard(): THREE.Group {
+  const g = new THREE.Group();
+  g.name = 'corkboard';
+  g.position.set(BOARD.centreX, BOARD.centreY, BOARD.z);
+  const darkOak = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.5,
+    ...oak('frame', { light: '#9a6b41', dark: '#402816', repeat: 1, bump: 2.0, seed: 88 }),
+  });
+  /* -- the corkboard's frame, and the panel the DOM sheet lies on -------- */
+  const f = 96;
+  const fw = BOARD.width + f * 2;
+  const fh = BOARD.height + f * 2;
+  const cx = 0;
+  const cy = 0;
+  for (const [w, h, ox, oy] of [
+    [fw, f, 0, fh / 2 - f / 2],
+    [fw, f, 0, -fh / 2 + f / 2],
+    [f, fh - f * 2, -fw / 2 + f / 2, 0],
+    [f, fh - f * 2, fw / 2 - f / 2, 0],
+  ]) {
+    g.add(still(box(w, h, 88, darkOak, cx + ox, cy + oy, 20)));
+  }
+  // The cork itself, in the room rather than in the DOM. Its front face sits
+  // just behind the plane the memories are placed on, inside the moulding.
+  g.add(still(box(BOARD.width, BOARD.height, 44, new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.94,
+    metalness: 0,
+    ...cork(),
+    normalScale: new THREE.Vector2(0.85, 0.85),
+  }), cx, cy, -28)));
+
+  return g;
+}
+
 export function buildFittings(): THREE.Group {
   const g = new THREE.Group();
 
@@ -69,29 +106,7 @@ export function buildFittings(): THREE.Group {
     ...oak('frame', { light: '#9a6b41', dark: '#402816', repeat: 1, bump: 2.0, seed: 88 }),
   });
 
-  /* -- the corkboard's frame, and the panel the DOM sheet lies on -------- */
-  const f = 96;
-  const fw = BOARD.width + f * 2;
-  const fh = BOARD.height + f * 2;
-  const cx = BOARD.centreX;
-  const cy = BOARD.centreY;
-  for (const [w, h, ox, oy] of [
-    [fw, f, 0, fh / 2 - f / 2],
-    [fw, f, 0, -fh / 2 + f / 2],
-    [f, fh - f * 2, -fw / 2 + f / 2, 0],
-    [f, fh - f * 2, fw / 2 - f / 2, 0],
-  ]) {
-    g.add(still(box(w, h, 88, darkOak, cx + ox, cy + oy, BOARD.z + 20)));
-  }
-  // The cork itself, in the room rather than in the DOM. Its front face sits
-  // just behind the plane the memories are placed on, inside the moulding.
-  g.add(still(box(BOARD.width, BOARD.height, 44, new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.94,
-    metalness: 0,
-    ...cork(),
-    normalScale: new THREE.Vector2(0.85, 0.85),
-  }), cx, cy, BOARD.z - 28)));
+  g.add(buildCorkboard());
 
   /* Post, at the angles post always ends up at. Uniform envelopes read as a
      single white bar laid across the rack; it is the raggedness of the tops
